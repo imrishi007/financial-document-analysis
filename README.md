@@ -75,21 +75,6 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Usage
-
-Instructions for running each phase of the project will be added as development progresses.
-
-## Project Timeline
-
-| Phase | Description | Duration |
-|-------|-------------|----------|
-| Phase 1 | Problem Identification and Proposal | Jan 12 - Jan 24, 2026 |
-| Phase 2 | Dataset Design and Collection | Jan 25 - Feb 15, 2026 |
-| Phase 3 | Data Preprocessing and Analysis | Feb 16 - Feb 29, 2026 |
-| Phase 4 | Model Design and Implementation | Mar 01 - Mar 20, 2026 |
-| Phase 5 | Model Evaluation and Optimization | Mar 21 - Apr 05, 2026 |
-| Phase 6 | Documentation and Final Presentation | Apr 06 - Apr 25, 2026 |
-
 ## Technologies Used
 
 - Python 3.8+
@@ -99,16 +84,3 @@ Instructions for running each phase of the project will be added as development 
 - Matplotlib, Seaborn
 - BeautifulSoup, Requests
 - Jupyter Notebook
-
-## Author
-
-Rishi - 3rd Year, Computer Science
-
-## License
-
-This project is for educational purposes as part of the Deep Learning course.
-
-## Acknowledgments
-
-- SEC EDGAR for public financial filings
-- Course instructors for project guidance

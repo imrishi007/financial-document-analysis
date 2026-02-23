@@ -1,8 +1,3 @@
-"""
-Financial Document Analysis Package
+"""Financial direction forecasting package."""
 
-A deep learning project for analyzing and classifying financial documents.
-"""
-
-__version__ = "0.1.0"
-__author__ = "Rishi"
+__version__ = "2.0.0"

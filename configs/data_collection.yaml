@@ -1,0 +1,70 @@
+project:
+  title: "Heterogeneous Graph Fusion for Multimodal Market Dynamics"
+
+companies:
+  - ticker: AAPL
+    name: Apple Inc.
+  - ticker: MSFT
+    name: Microsoft Corporation
+  - ticker: GOOGL
+    name: Alphabet Inc.
+  - ticker: AMZN
+    name: Amazon.com, Inc.
+  - ticker: NVDA
+    name: NVIDIA Corporation
+  - ticker: META
+    name: Meta Platforms, Inc.
+  - ticker: TSLA
+    name: Tesla, Inc.
+  - ticker: AMD
+    name: Advanced Micro Devices, Inc.
+  - ticker: INTC
+    name: Intel Corporation
+  - ticker: ORCL
+    name: Oracle Corporation
+
+date_range:
+  start_date: "2016-01-01"
+  end_date: "2026-02-23"
+  sec_start_year: 2016
+  sec_end_year: 2025
+
+sources:
+  sec:
+    enabled: true
+    user_agent: "HeterogeneousGraphFusionResearch/1.0 (contact: research@example.com)"
+    include_amended: false
+    request_timeout_seconds: 30
+  price:
+    enabled: true
+    interval: "1d"
+  news:
+    enabled: true
+    provider: "rss_then_newsapi"
+    newsapi_key_env: "NEWSAPI_KEY"
+    per_ticker_limit: 200
+    request_timeout_seconds: 20
+    fetch_full_text: false
+  earnings:
+    enabled: true
+    max_quarters: 40
+  graph:
+    enabled: true
+
+paths:
+  raw_root: "data/raw"
+  interim_root: "data/interim"
+  sec_raw_dir: "data/raw/sec_10k"
+  sec_log_csv: "data/interim/sec_10k_collection_log.csv"
+  sec_coverage_csv: "data/interim/sec_10k_coverage.csv"
+  price_dir: "data/raw/prices"
+  price_log_csv: "data/interim/price_collection_log.csv"
+  news_dir: "data/raw/news"
+  news_csv: "data/raw/news/news_articles.csv"
+  news_log_csv: "data/interim/news_collection_log.csv"
+  earnings_dir: "data/raw/earnings"
+  earnings_csv: "data/raw/earnings/earnings_surprise.csv"
+  earnings_log_csv: "data/interim/earnings_collection_log.csv"
+  graph_dir: "data/raw/graph"
+  graph_edges_csv: "data/raw/graph/tech10_edges.csv"
+  graph_nodes_csv: "data/raw/graph/tech10_nodes.csv"

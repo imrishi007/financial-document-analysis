@@ -1,1 +1,2 @@
-"""Data collection utilities for financial documents."""
+"""Data collection modules for multimodal market data."""
+

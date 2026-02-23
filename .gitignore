@@ -83,10 +83,17 @@ Thumbs.db
 # Project specific
 data/raw/*
 !data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/targets/*
+!data/targets/.gitkeep
 models/*.pt
 models/*.pth
 models/*.h5
 logs/*.log
+docs/DATASET_DOCUMENTATION.tex
 
 # API Keys and secrets
 .env

@@ -1,0 +1,117 @@
+{
+  "single_modality_ablation": {
+    "price": {
+      "auc": 0.5095977407094565,
+      "n_test": 10620
+    },
+    "gat": {
+      "auc": 0.5278425864492582,
+      "n_test": 10620
+    },
+    "doc": {
+      "auc": 0.4964536752125515,
+      "n_test": 10620
+    },
+    "news": {
+      "auc": 0.48740781048847326,
+      "n_test": 10620
+    },
+    "surprise": {
+      "auc": 0.5038964988170106,
+      "n_test": 10620
+    }
+  },
+  "gat_ablation": {
+    "with_gat_auc": 0.5257248945369566,
+    "without_gat_auc": 0.5026553494459591,
+    "delta": 0.023069545090997456
+  },
+  "multitask_comparison": {
+    "single_task_direction_auc": 0.5241354852067237,
+    "multitask_direction_auc": 0.5161422296732943,
+    "multitask_volatility_r2": 0.41149758711507245,
+    "multitask_surprise_auc": 1.0
+  },
+  "per_ticker_analysis": {
+    "AAPL": {
+      "auc": 0.4735534357685497,
+      "n_samples": 1062,
+      "up_pct": 54.048964218455744
+    },
+    "AMD": {
+      "auc": 0.5113046701260193,
+      "n_samples": 1062,
+      "up_pct": 53.483992467043315
+    },
+    "AMZN": {
+      "auc": 0.5719908072392991,
+      "n_samples": 1062,
+      "up_pct": 55.55555555555556
+    },
+    "GOOGL": {
+      "auc": 0.495155719470788,
+      "n_samples": 1062,
+      "up_pct": 58.75706214689266
+    },
+    "INTC": {
+      "auc": 0.5652831265154757,
+      "n_samples": 1062,
+      "up_pct": 46.32768361581921
+    },
+    "META": {
+      "auc": 0.5288988829247062,
+      "n_samples": 1062,
+      "up_pct": 57.43879472693032
+    },
+    "MSFT": {
+      "auc": 0.5733826889152376,
+      "n_samples": 1062,
+      "up_pct": 56.873822975517896
+    },
+    "NVDA": {
+      "auc": 0.5562203791469194,
+      "n_samples": 1062,
+      "up_pct": 60.263653483992464
+    },
+    "ORCL": {
+      "auc": 0.5248268226209403,
+      "n_samples": 1062,
+      "up_pct": 51.2241054613936
+    },
+    "TSLA": {
+      "auc": 0.4738620552574041,
+      "n_samples": 1062,
+      "up_pct": 48.58757062146893
+    }
+  },
+  "cross_phase_direction_auc": {
+    "Price (CNN-BiLSTM)": 0.5241354852067237,
+    "Document (FinBERT)": 0.5535714285714286,
+    "News (FinBERT+BiGRU)": 0.5460069444444443,
+    "Surprise (MLP)": 0.6313432835820896,
+    "GAT (Graph Attention)": 0.5257248945369566,
+    "No-GAT (Ablation)": 0.5026553494459591,
+    "Fusion (Gated Multi-Task)": 0.5161422296732943
+  },
+  "fusion_gate_weights": {
+    "price": 0.30732274055480957,
+    "gat": 0.22849474847316742,
+    "doc": 0.050929222255945206,
+    "news": 0.020777715370059013,
+    "surprise": 0.39247554540634155
+  },
+  "fusion_volatility": {
+    "mse": 0.02490802109291825,
+    "rmse": 0.157822752139602,
+    "mae": 0.11791106439327116,
+    "r2": 0.41149758711507245
+  },
+  "fusion_surprise": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "auc": 1.0
+  },
+  "time_seconds": 3.3686137199401855
+}

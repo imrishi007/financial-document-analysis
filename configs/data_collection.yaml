@@ -40,11 +40,14 @@ sources:
     interval: "1d"
   news:
     enabled: true
-    provider: "rss_then_newsapi"
+    provider: "rss_then_finnhub"
     newsapi_key_env: "NEWSAPI_KEY"
+    finnhub_key_env: "FINNHUB_API_KEY"
     per_ticker_limit: 200
     request_timeout_seconds: 20
     fetch_full_text: false
+    finnhub_chunk_months: 3
+    finnhub_rate_limit_delay: 1.1
   earnings:
     enabled: true
     max_quarters: 40

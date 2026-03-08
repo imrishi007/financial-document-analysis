@@ -1,0 +1,28 @@
+{
+  "graph_gat": {
+    "status": "OK",
+    "test_metrics": {
+      "accuracy": 0.5429378531073447,
+      "precision": 0.5553118908382066,
+      "recall": 0.7910447761194029,
+      "f1": 0.6525411596277738,
+      "auc": 0.5257248945369566
+    },
+    "baseline_accuracy": 0.5425612052730697,
+    "epochs_trained": 10,
+    "n_train": 1723,
+    "n_val": 250,
+    "n_test": 531,
+    "time_seconds": 2337.4
+  },
+  "no_gat_ablation": {
+    "status": "OK",
+    "test_metrics": {
+      "accuracy": 0.5425612052730697,
+      "precision": 0.5425612052730697,
+      "recall": 1.0,
+      "f1": 0.7034550115980954,
+      "auc": 0.5026553494459591
+    }
+  }
+}

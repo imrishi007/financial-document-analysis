@@ -1,0 +1,52 @@
+{
+  "fusion": {
+    "status": "OK",
+    "direction_metrics": {
+      "accuracy": 0.4824858757062147,
+      "precision": 0.5480838756326826,
+      "recall": 0.2631030892051371,
+      "f1": 0.35553470919324576,
+      "auc": 0.5161422296732943
+    },
+    "direction_baseline": 0.5425612052730697,
+    "volatility_metrics": {
+      "mse": 0.02490802109291825,
+      "rmse": 0.157822752139602,
+      "mae": 0.11791106439327116,
+      "r2": 0.41149758711507245
+    },
+    "surprise_metrics": {
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "auc": 1.0
+    },
+    "surprise_baseline": 0.7701149425287356,
+    "mean_gate_weights": [
+      0.30732274055480957,
+      0.22849474847316742,
+      0.050929222255945206,
+      0.020777715370059013,
+      0.39247554540634155
+    ],
+    "epochs_trained": 12,
+    "n_train": 34450,
+    "n_val": 5000,
+    "n_test": 10620,
+    "time_seconds": 39.6
+  },
+  "extraction_summary": {
+    "total_samples": 50070,
+    "price_available": 50070,
+    "gat_available": 50070,
+    "doc_available": 41796,
+    "news_available": 1068,
+    "surprise_available": 48528,
+    "dir_labels_valid": 50070,
+    "vol_targets_valid": 50070,
+    "surp_targets_valid": 786,
+    "time_seconds": 250.20690870285034,
+    "save_path": "data\\embeddings\\fusion_embeddings.pt"
+  }
+}

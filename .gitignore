@@ -89,9 +89,13 @@ data/interim/*
 !data/interim/.gitkeep
 data/targets/*
 !data/targets/.gitkeep
-models/*.pt
-models/*.pth
-models/*.h5
+
+# Large model/embedding files (exceed GitHub 100MB limit)
+*.pt
+*.pth
+*.h5
+data/embeddings/*.pt
+
 logs/*.log
 docs/DATASET_DOCUMENTATION.tex
 

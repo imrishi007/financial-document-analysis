@@ -46,7 +46,7 @@
     citecolor=blue
 }
 
-\title{\textbf{Multimodal Financial Direction Forecasting Using Deep Learning:\\Model Development \& Experimental Results\\(Phases 3--7 Documentation)}}
+\title{\textbf{Multimodal Financial Direction Forecasting Using Deep Learning:\\Model Development \& Experimental Results\\(Phases 3--9 Documentation)}}
 \author{
     \textbf{Rishi Raval}\\
     Roll Number: 1AUA23BCS155\\
@@ -1575,5 +1575,197 @@ V1 Conf. & Confidence filtering & 0.6024 & 6.3\% \\
 \vspace{1cm}
 
 \noindent\textbf{Code Repository}: \url{https://github.com/imrishi007/financial-document-analysis.git}
+
+% ======================================================================
+% PHASE 9: STRATEGIC MODEL UPGRADES
+% ======================================================================
+\newpage
+\section{Phase 9: Strategic Model Upgrades}
+
+Phase 9 investigates four strategic improvement areas beyond the core model architecture:
+regime-switching ensembles, realistic backtesting, model optimization for deployment,
+and enhanced cross-stock feature engineering.
+
+\subsection{Phase 9A: Regime-Switching Ensemble}
+
+\subsubsection{Motivation}
+Market behavior varies across regimes (bull, bear, sideways). A regime-switching
+ensemble trains specialist expert models for each market state, potentially capturing
+regime-specific patterns that a single model averages over.
+
+\subsubsection{Method}
+\begin{enumerate}
+    \item \textbf{Regime Detection}: KMeans clustering (3 states) on daily cross-stock 
+    market features: 5-day rolling mean return and rolling dispersion, computed from 
+    \textit{historical} daily log returns (backward-looking).
+    \item \textbf{Expert Training}: One Clean Fusion model per regime, trained only on 
+    samples assigned to that regime.
+    \item \textbf{Routing}: At test time, each sample is routed to its regime-specific 
+    expert for prediction.
+\end{enumerate}
+
+\subsubsection{Results}
+
+\begin{table}[H]
+\centering
+\caption{Phase 9A: Regime-Switching Expert Results}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Regime} & \textbf{Days} & \textbf{Train N} & \textbf{Val AUC} & \textbf{Test AUC} & \textbf{Test N} \\
+\midrule
+Bear     & 752 & 8,560  & 0.6023 & 0.5060 & 5,120 \\
+Sideways & 921 & 13,370 & 0.5641 & 0.4864 & 2,920 \\
+Bull     & 855 & 12,520 & 0.5688 & 0.5060 & 2,580 \\
+\midrule
+\textbf{Combined} & \textbf{2,528} & --- & --- & \textbf{0.4976} & \textbf{10,620} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Finding}: The regime ensemble (AUC=0.498) \textit{underperforms} the unified
+model (AUC=0.531). Splitting data by regime reduces per-expert training samples, increasing
+variance without improving bias. The regime detection itself is noisy with only 10 stocks.
+
+\subsection{Phase 9B: Backtesting Engine with Transaction Costs}
+
+\subsubsection{Motivation}
+A model's statistical AUC is insufficient to assess real-world trading viability. We need
+to measure performance after accounting for transaction costs, slippage, and portfolio
+construction choices.
+
+\subsubsection{Strategies Tested}
+\begin{itemize}
+    \item \textbf{Equal Weight}: Buy top-$K$ predicted stocks ($K \in \{3, 5\}$) with equal allocation
+    \item \textbf{Confidence-Weighted}: Position size proportional to model probability
+    \item \textbf{Risk-Parity}: Inverse-volatility weighted positions
+    \item \textbf{Buy-and-Hold}: Equal-weight all 10 stocks (benchmark)
+\end{itemize}
+
+Fee levels tested: 0bp, 5bp, and 10bp per trade.
+
+\subsubsection{Results}
+
+\begin{table}[H]
+\centering
+\caption{Phase 9B: Backtesting Results (2022--2025 Test Period)}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Strategy} & \textbf{Net Return} & \textbf{Sharpe} & \textbf{Max DD} & \textbf{Win Rate} \\
+\midrule
+Buy-and-Hold           & +1,981\% & 1.23  & $-$73.0\% & 60.8\% \\
+EW Top-5 (0bp)         & +1,263\% & 1.66  & $-$37.5\% & 61.6\% \\
+EW Top-3 (0bp)         & +1,404\% & 1.36  & $-$45.9\% & 58.4\% \\
+\midrule
+EW Top-5 (5bp)         & $-$93.3\% & $-$1.54 & $-$93.8\% & 37.7\% \\
+EW Top-3 (5bp)         & $-$37.5\% & $-$0.11 & $-$68.8\% & 48.2\% \\
+Confidence $> 0.52$    & $-$100.0\% & $-$4.33 & $-$100.0\% & 20.5\% \\
+Risk-Parity Top-5      & $-$94.2\% & $-$1.76 & $-$94.5\% & 36.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Critical Finding}: With even modest transaction costs (5bp), all model-based
+strategies become deeply unprofitable. At AUC=0.53, the direction signal is too weak to
+overcome daily rebalancing costs. The zero-fee ``alpha'' is entirely consumed by transaction
+friction. Profitable deployment would require AUC $\geq$ 0.55 consistently or longer holding
+periods to reduce turnover.
+
+\subsection{Phase 9C: Model Optimization (FP16 / INT8 / ONNX)}
+
+\subsubsection{Results}
+
+\begin{table}[H]
+\centering
+\caption{Phase 9C: Inference Optimization Benchmarks (10,620 samples)}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Format} & \textbf{Time (ms)} & \textbf{Size (MB)} & \textbf{Speedup} & \textbf{AUC} \\
+\midrule
+FP32 (GPU) & 570 & 2.18 & 1.00$\times$ & 0.531 \\
+FP16 (GPU) & 637 & 1.09 & 0.89$\times$ & --- \\
+INT8 (CPU) & 679 & $\sim$1.1 & 0.84$\times$ & 0.525 \\
+ONNX       & \multicolumn{4}{c}{Export failed (missing onnxscript)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Finding}: FP16 and INT8 show no speedup because the model is very small 
+(545K parameters, 2.2 MB). Quantization overhead exceeds compression savings at this scale. 
+Benefits would appear at $>$10M parameters. INT8 preserves prediction quality (AUC=0.525).
+
+\subsection{Phase 9D: Enhanced Cross-Stock Features}
+
+\subsubsection{Method}
+Five cross-stock features computed from \textbf{historical} (backward-looking) data only:
+\begin{enumerate}
+    \item \textbf{Sector Past Momentum}: Mean rolling 5-day past return of sector peers
+    \item \textbf{Market Past Momentum}: Mean rolling 5-day past return of all 10 stocks
+    \item \textbf{Cross-Stock Dispersion}: Std dev of past returns across all stocks
+    \item \textbf{Volatility Regime}: Realized vol relative to cross-sectional median
+    \item \textbf{Sector Rank}: Percentile rank within sector by past 5-day return
+\end{enumerate}
+
+These are fused via a 6-head attention gate (5 original modalities + enhanced features).
+
+\subsubsection{Data Leakage Discovery \& Fix}
+
+The initial implementation accidentally used \texttt{direction\_5d\_return}
+(forward-looking 5-day return) from peer stocks to compute sector/market momentum.
+Since tech stocks are highly correlated, peer forward returns leaked the target---producing 
+a spurious AUC=0.939 and gate weight of 62.5\% on the enhanced features.
+
+\textbf{Fix}: Replaced with \texttt{log\_return} (historical daily close-to-close return) 
+and computed rolling 5-day \textit{past} sums. The corrected AUC dropped to a 
+realistic 0.5226.
+
+\subsubsection{Results}
+
+\begin{table}[H]
+\centering
+\caption{Phase 9D: Enhanced Features --- Leaky vs Fixed}
+\begin{tabular}{lrrl}
+\toprule
+\textbf{Model} & \textbf{Test AUC} & \textbf{Enhanced Gate Wt.} & \textbf{Status} \\
+\midrule
+Baseline (Clean Fusion)   & 0.5312 & --- & Valid \\
+Enhanced (leaky features) & 0.9390 & 62.5\% & \textcolor{red}{INVALID} \\
+\textbf{Enhanced (fixed)} & \textbf{0.5226} & \textbf{22.5\%} & \textbf{Valid} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Gate weight distribution (fixed model): Price 34.2\%, GAT 24.3\%, Document 10.8\%, 
+Surprise 8.2\%, Enhanced 22.5\%. The model correctly assigns non-trivial weight to cross-stock 
+features, but they slightly \textit{hurt} test performance (0.523 vs 0.531), indicating these 
+features add noise rather than signal.
+
+\subsection{Phase 9 Summary}
+
+\begin{table}[H]
+\centering
+\caption{Phase 9 Summary of All Strategic Upgrades}
+\begin{tabular}{llrl}
+\toprule
+\textbf{Phase} & \textbf{Method} & \textbf{Test AUC} & \textbf{Verdict} \\
+\midrule
+9A & Regime-switching ensemble      & 0.4976 & Negative (data splitting hurts) \\
+9B & Backtesting (5bp fees)         & ---    & All strategies unprofitable \\
+9C & FP16/INT8 optimization         & 0.525  & No speedup (model too small) \\
+9D & Enhanced cross-stock features  & 0.5226 & Marginal negative vs baseline \\
+\midrule
+\multicolumn{2}{l}{\textbf{Best model: Phase 8 V2 Ranking Loss}} & \textbf{0.5312} & \textbf{Unchanged} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent None of the Phase 9 strategic upgrades improve upon the Phase 8 V2 ranking loss 
+model (AUC=0.5312). The key lessons:
+\begin{enumerate}
+    \item \textbf{Regime splitting hurts} when individual regimes have insufficient data
+    \item \textbf{Transaction costs dominate} at current signal strength (AUC=0.53)
+    \item \textbf{Model compression} is irrelevant at 545K parameter scale
+    \item \textbf{Cross-stock features from public data} add noise, not alpha
+    \item \textbf{Data leakage vigilance} is essential---forward-looking peer returns inflated AUC from 0.52 to 0.94
+\end{enumerate}
 
 \end{document}

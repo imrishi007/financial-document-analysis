@@ -1,0 +1,222 @@
+{
+  "phase9a_regime_switching": {
+    "regime_counts": {
+      "Bear": 752,
+      "Sideways": 921,
+      "Bull": 855
+    },
+    "expert_val_results": {
+      "Bear": {
+        "best_val_auc": 0.6022854458277487,
+        "n_train": 8560,
+        "n_val": 1080
+      },
+      "Sideways": {
+        "best_val_auc": 0.5641288953356525,
+        "n_train": 13370,
+        "n_val": 2020
+      },
+      "Bull": {
+        "best_val_auc": 0.5688187325256291,
+        "n_train": 12520,
+        "n_val": 1900
+      }
+    },
+    "per_regime_test": {
+      "Bear": {
+        "auc": 0.5059741358937295,
+        "acc": 0.488671875,
+        "n": 5120
+      },
+      "Sideways": {
+        "auc": 0.4863795261647433,
+        "acc": 0.473972602739726,
+        "n": 2920
+      },
+      "Bull": {
+        "auc": 0.5060148094796456,
+        "acc": 0.46124031007751937,
+        "n": 2580
+      }
+    },
+    "combined_test_metrics": {
+      "accuracy": 0.47796610169491527,
+      "precision": 0.5358316896778436,
+      "recall": 0.28288788615064214,
+      "f1": 0.37028623353021356,
+      "auc": 0.4976384509232634
+    },
+    "time_seconds": 170.68323493003845
+  },
+  "phase9b_backtesting": {
+    "buy_and_hold": {
+      "strategy": "Buy-and-Hold (Benchmark)",
+      "total_return_net": 19.806165009135864,
+      "sharpe_ratio": 1.231291757574964,
+      "max_drawdown": -0.7298580931687497,
+      "win_rate": 0.608286252354049,
+      "n_periods": 531
+    },
+    "EqualWeight_top3_fee0.0000": {
+      "strategy": "EqualWeight_top3_fee0.0000",
+      "total_return_gross": 14.039478056373873,
+      "total_return_net": 14.039478056373873,
+      "sharpe_ratio": 1.3561958844452255,
+      "max_drawdown": -0.4586500402148317,
+      "win_rate": 0.583804143126177,
+      "n_periods": 531,
+      "total_trades": 3186,
+      "avg_daily_pnl": 0.005533248686697206,
+      "fee_pct": 0.0
+    },
+    "EqualWeight_top5_fee0.0000": {
+      "strategy": "EqualWeight_top5_fee0.0000",
+      "total_return_gross": 12.627308523355394,
+      "total_return_net": 12.627308523355394,
+      "sharpe_ratio": 1.6555051731595334,
+      "max_drawdown": -0.37484635495073604,
+      "win_rate": 0.615819209039548,
+      "n_periods": 531,
+      "total_trades": 5310,
+      "avg_daily_pnl": 0.005175752677657485,
+      "fee_pct": 0.0
+    },
+    "EqualWeight_top3_fee0.0005": {
+      "strategy": "EqualWeight_top3_fee0.0005",
+      "total_return_gross": 14.039478056373873,
+      "total_return_net": -0.3749490548350568,
+      "sharpe_ratio": -0.1144004627304207,
+      "max_drawdown": -0.6880715582814699,
+      "win_rate": 0.4821092278719397,
+      "n_periods": 531,
+      "total_trades": 3186,
+      "avg_daily_pnl": -0.00046675131330279387,
+      "fee_pct": 0.0005
+    },
+    "EqualWeight_top5_fee0.0005": {
+      "strategy": "EqualWeight_top5_fee0.0005",
+      "total_return_gross": 12.627308523355394,
+      "total_return_net": -0.9327706351863432,
+      "sharpe_ratio": -1.5430734225797154,
+      "max_drawdown": -0.9377801857559971,
+      "win_rate": 0.3766478342749529,
+      "n_periods": 531,
+      "total_trades": 5310,
+      "avg_daily_pnl": -0.004824247322342516,
+      "fee_pct": 0.0005
+    },
+    "EqualWeight_top3_fee0.0010": {
+      "strategy": "EqualWeight_top3_fee0.0010",
+      "total_return_gross": 14.039478056373873,
+      "total_return_net": -0.9745160160585029,
+      "sharpe_ratio": -1.584996809906067,
+      "max_drawdown": -0.9782962480096296,
+      "win_rate": 0.35969868173258,
+      "n_periods": 531,
+      "total_trades": 3186,
+      "avg_daily_pnl": -0.006466751313302794,
+      "fee_pct": 0.001
+    },
+    "EqualWeight_top5_fee0.0010": {
+      "strategy": "EqualWeight_top5_fee0.0010",
+      "total_return_gross": 12.627308523355394,
+      "total_return_net": -0.9996856692453153,
+      "sharpe_ratio": -4.741652018318963,
+      "max_drawdown": -0.9996817040743837,
+      "win_rate": 0.2071563088512241,
+      "n_periods": 531,
+      "total_trades": 5310,
+      "avg_daily_pnl": -0.014824247322342514,
+      "fee_pct": 0.001
+    },
+    "Confidence_0.52": {
+      "strategy": "Confidence_0.52",
+      "total_return_net": -0.9999493394757976,
+      "sharpe_ratio": -4.332567798653506,
+      "max_drawdown": -0.999953844390634,
+      "win_rate": 0.20527306967984935,
+      "n_periods": 531
+    },
+    "Confidence_0.55": {
+      "strategy": "Confidence_0.55",
+      "total_return_net": -0.9998084840993187,
+      "sharpe_ratio": -3.4763698073521674,
+      "max_drawdown": -0.9998258685073755,
+      "win_rate": 0.2448210922787194,
+      "n_periods": 531
+    },
+    "Confidence_0.60": {
+      "strategy": "Confidence_0.60",
+      "total_return_net": -0.9995001138974807,
+      "sharpe_ratio": -2.854971514041284,
+      "max_drawdown": -0.9995568547528156,
+      "win_rate": 0.2975517890772128,
+      "n_periods": 531
+    },
+    "RiskParity_top3": {
+      "strategy": "RiskParity_top3",
+      "total_return_net": -0.45370507625094547,
+      "sharpe_ratio": -0.20686683356255384,
+      "max_drawdown": -0.6881400564865767,
+      "win_rate": 0.4745762711864407,
+      "n_periods": 531
+    },
+    "RiskParity_top5": {
+      "strategy": "RiskParity_top5",
+      "total_return_net": -0.9417116241371709,
+      "sharpe_ratio": -1.76301296583625,
+      "max_drawdown": -0.945497742437593,
+      "win_rate": 0.3615819209039548,
+      "n_periods": 531
+    },
+    "time_seconds": 19.856542587280273
+  },
+  "phase9c_optimization": {
+    "onnx": {
+      "error": "No module named 'onnxscript'"
+    },
+    "n_params": 545671,
+    "fp32": {
+      "time_ms": 569.8067666659578,
+      "size_mb": 2.182684
+    },
+    "fp16": {
+      "time_ms": 636.9155666664786,
+      "size_mb": 1.091342,
+      "speedup": 0.894634699616845
+    },
+    "int8": {
+      "time_ms": 678.4976333328814,
+      "auc": 0.5247038810943034,
+      "speedup_vs_fp32_gpu": 0.839806564787827
+    },
+    "time_seconds": 7.7188498973846436
+  },
+  "phase9d_enhanced_features": {
+    "test_metrics": {
+      "accuracy": 0.4815442561205273,
+      "precision": 0.5978593272171254,
+      "recall": 0.13571676501214855,
+      "f1": 0.2212164073550212,
+      "auc": 0.5226029083664372
+    },
+    "gate_weights": {
+      "price": 0.3417629897594452,
+      "gat": 0.24313417077064514,
+      "doc": 0.10845129191875458,
+      "surprise": 0.08173980563879013,
+      "enhanced": 0.22491174936294556
+    },
+    "best_val_auc": 0.5396944650617443,
+    "n_params": 612488,
+    "enhanced_features": [
+      "sector_momentum",
+      "market_momentum",
+      "cross_dispersion",
+      "vol_regime",
+      "sector_rank"
+    ],
+    "time_seconds": 74.15701603889465
+  },
+  "total_time_seconds": 273.3258264064789
+}

@@ -1,4 +1,4 @@
-"""Common training utilities: config, early stopping, checkpointing."""
+"""Common training utilities: config, early stopping, checkpointing, AMP."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+
+from src.utils.gpu import setup_gpu, log_gpu_usage, create_grad_scaler
 
 
 # ---------------------------------------------------------------------------
@@ -24,10 +26,14 @@ class TrainingConfig:
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     epochs: int = 20
-    batch_size: int = 32
+    batch_size: int = 512  # Increased from 32 for GPU utilization
     patience: int = 5  # early-stopping patience
     seed: int = 42
     device: str = "auto"
+    use_amp: bool = True  # Automatic mixed precision
+    num_workers: int = 4
+    pin_memory: bool = True
+    gradient_accumulation_steps: int = 1
 
     def resolve_device(self) -> str:
         if self.device == "auto":
@@ -55,6 +61,29 @@ def create_optimizer(
         model.parameters(),
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
+    )
+
+
+def make_dataloader(
+    dataset,
+    batch_size: int,
+    shuffle: bool = False,
+    config: Optional[TrainingConfig] = None,
+) -> DataLoader:
+    """Create a DataLoader with GPU-optimized settings."""
+    if config is None:
+        config = TrainingConfig()
+    # On Windows, num_workers>0 is slower due to process spawning overhead.
+    import platform
+    nw = 0 if platform.system() == "Windows" else config.num_workers
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        pin_memory=config.pin_memory and torch.cuda.is_available() and nw > 0,
+        num_workers=nw,
+        persistent_workers=nw > 0,
+        drop_last=shuffle,  # drop last incomplete batch during training
     )
 
 
@@ -147,7 +176,7 @@ def evaluate_epoch(
     device: str,
     *,
     input_key: str = "features",
-    label_key: str = "direction_1d",
+    label_key: str = "direction_60d",
 ) -> dict[str, Any]:
     """Run one evaluation epoch and return loss, predictions, and true labels."""
     model.eval()
@@ -158,8 +187,8 @@ def evaluate_epoch(
     total = 0
 
     for batch in loader:
-        features = batch[input_key].to(device)
-        labels = batch[label_key].to(device)
+        features = batch[input_key].to(device, non_blocking=True)
+        labels = batch[label_key].to(device, non_blocking=True)
         logits = model(features)
         loss = criterion(logits, labels)
 

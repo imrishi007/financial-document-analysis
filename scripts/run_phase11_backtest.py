@@ -4,6 +4,7 @@ Uses actual model predictions from the V2 test set (not random).
 
 Saves results to: models/phase11_backtest_results.json
 """
+
 from __future__ import annotations
 
 import json
@@ -37,14 +38,20 @@ def get_model_predictions(
 
     # Test set: >= 2024
     test_idx = [
-        i for i in range(len(dataset))
+        i
+        for i in range(len(dataset))
         if dataset.dates[i] > "2023-12-31" and dataset.direction_label[i] >= 0
     ]
 
     model = MultimodalFusionModel(
-        price_dim=256, gat_dim=256, doc_dim=768,
-        macro_dim=macro_dim, surprise_dim=5,
-        proj_dim=128, hidden_dim=256, dropout=0.3,
+        price_dim=256,
+        gat_dim=256,
+        doc_dim=768,
+        macro_dim=macro_dim,
+        surprise_dim=5,
+        proj_dim=128,
+        hidden_dim=256,
+        dropout=0.3,
     ).to(device_str)
     ckpt = torch.load(model_path, weights_only=False, map_location=device_str)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -54,19 +61,31 @@ def get_model_predictions(
     with torch.no_grad():
         for idx in test_idx:
             sample = dataset[idx]
-            for k in ["price_emb", "gat_emb", "doc_emb", "macro_emb",
-                       "surprise_feat", "modality_mask"]:
+            for k in [
+                "price_emb",
+                "gat_emb",
+                "doc_emb",
+                "macro_emb",
+                "surprise_feat",
+                "modality_mask",
+            ]:
                 sample[k] = sample[k].unsqueeze(0).to(device_str)
             out = model(
-                sample["price_emb"], sample["gat_emb"], sample["doc_emb"],
-                sample["macro_emb"], sample["surprise_feat"], sample["modality_mask"],
+                sample["price_emb"],
+                sample["gat_emb"],
+                sample["doc_emb"],
+                sample["macro_emb"],
+                sample["surprise_feat"],
+                sample["modality_mask"],
             )
             prob = torch.softmax(out["direction_logits"], dim=1)[0, 1].item()
-            pred_rows.append({
-                "date": dataset.dates[idx],
-                "ticker": dataset.tickers[idx],
-                "pred_prob": prob,
-            })
+            pred_rows.append(
+                {
+                    "date": dataset.dates[idx],
+                    "ticker": dataset.tickers[idx],
+                    "pred_prob": prob,
+                }
+            )
 
     pred_df = pd.DataFrame(pred_rows)
     pred_df["date"] = pd.to_datetime(pred_df["date"])
@@ -96,13 +115,17 @@ def main():
     print("\n[1/2] Getting V2 model predictions on test set...")
     pred_df, price_df = get_model_predictions()
     print(f"  Predictions: {len(pred_df)} rows, {pred_df['ticker'].nunique()} tickers")
-    print(f"  Date range: {pred_df['date'].min().date()} to {pred_df['date'].max().date()}")
+    print(
+        f"  Date range: {pred_df['date'].min().date()} to {pred_df['date'].max().date()}"
+    )
 
     print("\n[2/2] Running weekly long-short backtest...")
     results = run_full_backtest(
-        pred_df, price_df,
+        pred_df,
+        price_df,
         cost_bps_list=[0, 5, 10, 20],
-        n_long=2, n_short=2,
+        n_long=2,
+        n_short=2,
         rebalance_every=5,
         verbose=True,
     )

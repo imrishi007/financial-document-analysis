@@ -11,6 +11,7 @@ Key differences from V1:
 
 Saves results to: models/phase11_confidence_results.json
 """
+
 from __future__ import annotations
 
 import json
@@ -49,16 +50,22 @@ def run_confidence_filtering(
 
     # Split: test >= 2024
     test_idx = [
-        i for i in range(len(dataset))
+        i
+        for i in range(len(dataset))
         if dataset.dates[i] > "2023-12-31" and dataset.direction_label[i] >= 0
     ]
     print(f"[{label}] Test samples: {len(test_idx)}")
 
     # Load model
     model = MultimodalFusionModel(
-        price_dim=256, gat_dim=256, doc_dim=768,
-        macro_dim=macro_dim, surprise_dim=5,
-        proj_dim=128, hidden_dim=256, dropout=0.3,
+        price_dim=256,
+        gat_dim=256,
+        doc_dim=768,
+        macro_dim=macro_dim,
+        surprise_dim=5,
+        proj_dim=128,
+        hidden_dim=256,
+        dropout=0.3,
     ).to(device_str)
     ckpt = torch.load(model_path, weights_only=False, map_location=device_str)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -72,12 +79,22 @@ def run_confidence_filtering(
     with torch.no_grad():
         for idx in test_idx:
             sample = dataset[idx]
-            for k in ["price_emb", "gat_emb", "doc_emb", "macro_emb",
-                       "surprise_feat", "modality_mask"]:
+            for k in [
+                "price_emb",
+                "gat_emb",
+                "doc_emb",
+                "macro_emb",
+                "surprise_feat",
+                "modality_mask",
+            ]:
                 sample[k] = sample[k].unsqueeze(0).to(device_str)
             out = model(
-                sample["price_emb"], sample["gat_emb"], sample["doc_emb"],
-                sample["macro_emb"], sample["surprise_feat"], sample["modality_mask"],
+                sample["price_emb"],
+                sample["gat_emb"],
+                sample["doc_emb"],
+                sample["macro_emb"],
+                sample["surprise_feat"],
+                sample["modality_mask"],
             )
             probs = torch.softmax(out["direction_logits"], dim=1)
             up_prob = probs[0, 1].item()
@@ -91,11 +108,15 @@ def run_confidence_filtering(
     confidences = np.maximum(probs_arr, 1 - probs_arr)
 
     # Full unfiltered metrics
-    full_auc = roc_auc_score(labels_arr, probs_arr) if len(np.unique(labels_arr)) > 1 else 0.5
+    full_auc = (
+        roc_auc_score(labels_arr, probs_arr) if len(np.unique(labels_arr)) > 1 else 0.5
+    )
     full_acc = accuracy_score(labels_arr, (probs_arr >= 0.5).astype(int))
     majority = max(np.mean(labels_arr), 1 - np.mean(labels_arr))
 
-    print(f"[{label}] Full test: AUC={full_auc:.4f}, Acc={full_acc:.4f}, Baseline={majority:.4f}")
+    print(
+        f"[{label}] Full test: AUC={full_auc:.4f}, Acc={full_acc:.4f}, Baseline={majority:.4f}"
+    )
 
     # Threshold sweep
     sweep_results = []
@@ -105,27 +126,38 @@ def run_confidence_filtering(
         coverage = n_retained / len(labels_arr)
 
         if n_retained < 10 or len(np.unique(labels_arr[mask])) < 2:
-            sweep_results.append({
-                "threshold": thresh, "N": int(n_retained),
-                "coverage_pct": float(coverage * 100),
-                "auc": None, "accuracy": None, "f1": None,
-            })
+            sweep_results.append(
+                {
+                    "threshold": thresh,
+                    "N": int(n_retained),
+                    "coverage_pct": float(coverage * 100),
+                    "auc": None,
+                    "accuracy": None,
+                    "f1": None,
+                }
+            )
             continue
 
         filtered_auc = roc_auc_score(labels_arr[mask], probs_arr[mask])
-        filtered_acc = accuracy_score(labels_arr[mask], (probs_arr[mask] >= 0.5).astype(int))
+        filtered_acc = accuracy_score(
+            labels_arr[mask], (probs_arr[mask] >= 0.5).astype(int)
+        )
         filtered_f1 = f1_score(labels_arr[mask], (probs_arr[mask] >= 0.5).astype(int))
-        filtered_baseline = max(np.mean(labels_arr[mask]), 1 - np.mean(labels_arr[mask]))
+        filtered_baseline = max(
+            np.mean(labels_arr[mask]), 1 - np.mean(labels_arr[mask])
+        )
 
-        sweep_results.append({
-            "threshold": thresh,
-            "N": int(n_retained),
-            "coverage_pct": round(float(coverage * 100), 2),
-            "auc": round(float(filtered_auc), 4),
-            "accuracy": round(float(filtered_acc), 4),
-            "f1": round(float(filtered_f1), 4),
-            "baseline_acc": round(float(filtered_baseline), 4),
-        })
+        sweep_results.append(
+            {
+                "threshold": thresh,
+                "N": int(n_retained),
+                "coverage_pct": round(float(coverage * 100), 2),
+                "auc": round(float(filtered_auc), 4),
+                "accuracy": round(float(filtered_acc), 4),
+                "f1": round(float(filtered_f1), 4),
+                "baseline_acc": round(float(filtered_baseline), 4),
+            }
+        )
 
     # Per-ticker analysis (unfiltered vs filtered at ~10% coverage)
     # Find threshold closest to 10% coverage
@@ -181,10 +213,14 @@ def run_confidence_filtering(
         auc_str = f"{s['auc']:.4f}" if s["auc"] is not None else "  n/a"
         acc_str = f"{s['accuracy']:.4f}" if s.get("accuracy") is not None else "  n/a"
         f1_str = f"{s['f1']:.4f}" if s.get("f1") is not None else "  n/a"
-        print(f"{s['threshold']:<8.2f} {s['N']:>6} {s['coverage_pct']:>8.1f}% {auc_str:>8} {acc_str:>8} {f1_str:>8}")
+        print(
+            f"{s['threshold']:<8.2f} {s['N']:>6} {s['coverage_pct']:>8.1f}% {auc_str:>8} {acc_str:>8} {f1_str:>8}"
+        )
 
     if best_entry:
-        print(f"\nBest: AUC={best_entry['auc']:.4f} at {best_entry['coverage_pct']:.1f}% coverage (threshold={best_entry['threshold']})")
+        print(
+            f"\nBest: AUC={best_entry['auc']:.4f} at {best_entry['coverage_pct']:.1f}% coverage (threshold={best_entry['threshold']})"
+        )
 
     # Save
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)

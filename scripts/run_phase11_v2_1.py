@@ -8,6 +8,7 @@ Steps:
 
 Saves results to: models/phase11_v2_1_results.json
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,11 @@ from src.utils.gpu import setup_gpu, log_gpu_usage
 
 def train_expanded_macro(verbose: bool = True) -> dict:
     """Train a macro model with hidden_dim=128, output_dim=128."""
-    from src.data.macro_features import load_macro_data, compute_macro_features, MACRO_FEATURE_NAMES
+    from src.data.macro_features import (
+        load_macro_data,
+        compute_macro_features,
+        MACRO_FEATURE_NAMES,
+    )
     from src.models.macro_model import MacroStateModel
     from src.train.common import EarlyStopping, save_checkpoint
 
@@ -46,9 +51,11 @@ def train_expanded_macro(verbose: bool = True) -> dict:
     labels_df["date"] = pd.to_datetime(labels_df["date"]).dt.strftime("%Y-%m-%d")
 
     # Build training data: for each date, get macro features + majority label
-    date_labels = labels_df.groupby("date")["direction_60d_id"].agg(
-        lambda x: int(x.mode().iloc[0])
-    ).to_dict()
+    date_labels = (
+        labels_df.groupby("date")["direction_60d_id"]
+        .agg(lambda x: int(x.mode().iloc[0]))
+        .to_dict()
+    )
 
     X_list, y_list, dates_list = [], [], []
     for date_idx in features_df.index:
@@ -67,7 +74,9 @@ def train_expanded_macro(verbose: bool = True) -> dict:
 
     # Split
     train_mask = torch.tensor([d <= "2022-12-31" for d in dates_list])
-    val_mask = torch.tensor([(d > "2022-12-31") & (d <= "2023-12-31") for d in dates_list])
+    val_mask = torch.tensor(
+        [(d > "2022-12-31") & (d <= "2023-12-31") for d in dates_list]
+    )
     test_mask = torch.tensor([d > "2023-12-31" for d in dates_list])
 
     X_train, y_train = X[train_mask].to(device_str), y[train_mask].to(device_str)
@@ -75,14 +84,20 @@ def train_expanded_macro(verbose: bool = True) -> dict:
     X_test, y_test = X[test_mask].to(device_str), y[test_mask].to(device_str)
 
     if verbose:
-        print(f"  Expanded macro: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}")
+        print(
+            f"  Expanded macro: train={len(X_train)}, val={len(X_val)}, test={len(X_test)}"
+        )
 
     # V2.1 expanded model
-    model = MacroStateModel(input_dim=12, hidden_dim=128, output_dim=128, dropout=0.1).to(device_str)
+    model = MacroStateModel(
+        input_dim=12, hidden_dim=128, output_dim=128, dropout=0.1
+    ).to(device_str)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-3)
     criterion = torch.nn.CrossEntropyLoss()
     stopper = EarlyStopping(patience=10, mode="min")
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=50, eta_min=1e-5
+    )
 
     best_val_loss = float("inf")
     save_path = Path("models/macro_v2_1_best.pt")
@@ -104,11 +119,18 @@ def train_expanded_macro(verbose: bool = True) -> dict:
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            save_checkpoint(model, optimizer, epoch,
-                           {"val_loss": val_loss, "val_acc": val_acc}, save_path)
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                {"val_loss": val_loss, "val_acc": val_acc},
+                save_path,
+            )
 
         if epoch % 10 == 0 and verbose:
-            print(f"  Epoch {epoch:3d} | loss={loss.item():.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
+            print(
+                f"  Epoch {epoch:3d} | loss={loss.item():.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+            )
 
         if stopper(val_loss):
             if verbose:
@@ -123,6 +145,7 @@ def train_expanded_macro(verbose: bool = True) -> dict:
         test_logits = model(X_test)
         test_acc = (test_logits.argmax(1) == y_test).float().mean().item()
         from sklearn.metrics import roc_auc_score
+
         test_probs = torch.softmax(test_logits, dim=1)[:, 1].cpu().numpy()
         test_auc = roc_auc_score(y_test.cpu().numpy(), test_probs)
 
@@ -161,7 +184,12 @@ def retrain_v2_1_fusion(embeddings_path: str, verbose: bool = True) -> dict:
     from src.data.fusion_dataset import FusionEmbeddingDataset
     from src.models.fusion_model import MultimodalFusionModel
     from src.models.losses import CombinedLoss
-    from src.train.common import EarlyStopping, save_checkpoint, make_dataloader, TrainingConfig
+    from src.train.common import (
+        EarlyStopping,
+        save_checkpoint,
+        make_dataloader,
+        TrainingConfig,
+    )
     from src.utils.seed import set_global_seed
     from torch.utils.data import Subset
     import numpy as np
@@ -171,8 +199,13 @@ def retrain_v2_1_fusion(embeddings_path: str, verbose: bool = True) -> dict:
     set_global_seed(42)
 
     config = TrainingConfig(
-        epochs=60, patience=10, batch_size=4096,
-        learning_rate=5e-4, weight_decay=1e-3, seed=42, use_amp=True,
+        epochs=60,
+        patience=10,
+        batch_size=4096,
+        learning_rate=5e-4,
+        weight_decay=1e-3,
+        seed=42,
+        use_amp=True,
     )
 
     dataset = FusionEmbeddingDataset(embeddings_path)
@@ -199,18 +232,36 @@ def retrain_v2_1_fusion(embeddings_path: str, verbose: bool = True) -> dict:
             test_idx.append(i)
 
     if verbose:
-        print(f"  Split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
+        print(
+            f"  Split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}"
+        )
 
-    dl_config = TrainingConfig(**{**config.__dict__, "pin_memory": device_str != "cuda"})
-    train_loader = make_dataloader(Subset(dataset, train_idx), batch_size=config.batch_size, shuffle=True, config=dl_config)
-    val_loader = make_dataloader(Subset(dataset, val_idx), batch_size=config.batch_size * 2, config=dl_config)
-    test_loader = make_dataloader(Subset(dataset, test_idx), batch_size=config.batch_size * 2, config=dl_config)
+    dl_config = TrainingConfig(
+        **{**config.__dict__, "pin_memory": device_str != "cuda"}
+    )
+    train_loader = make_dataloader(
+        Subset(dataset, train_idx),
+        batch_size=config.batch_size,
+        shuffle=True,
+        config=dl_config,
+    )
+    val_loader = make_dataloader(
+        Subset(dataset, val_idx), batch_size=config.batch_size * 2, config=dl_config
+    )
+    test_loader = make_dataloader(
+        Subset(dataset, test_idx), batch_size=config.batch_size * 2, config=dl_config
+    )
 
     # V2.1 model with macro_dim from data
     model = MultimodalFusionModel(
-        price_dim=256, gat_dim=256, doc_dim=768,
-        macro_dim=macro_dim, surprise_dim=5,
-        proj_dim=128, hidden_dim=256, dropout=0.3,
+        price_dim=256,
+        gat_dim=256,
+        doc_dim=768,
+        macro_dim=macro_dim,
+        surprise_dim=5,
+        proj_dim=128,
+        hidden_dim=256,
+        dropout=0.3,
     ).to(device_str)
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -218,8 +269,12 @@ def retrain_v2_1_fusion(embeddings_path: str, verbose: bool = True) -> dict:
         print(f"  V2.1 Fusion: {n_params:,} parameters (macro_dim={macro_dim})")
         log_gpu_usage("  After model: ")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=1e-6)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=config.epochs, eta_min=1e-6
+    )
     stopper = EarlyStopping(patience=config.patience, mode="min")
     criterion = CombinedLoss(lambda_dir=0.7, lambda_vol=0.3)
     use_amp = config.use_amp and device_str == "cuda"
@@ -246,7 +301,13 @@ def retrain_v2_1_fusion(embeddings_path: str, verbose: bool = True) -> dict:
 
             with torch.amp.autocast("cuda", enabled=use_amp):
                 out = model(price, gat, doc, macro, surp, mask)
-                losses = criterion(out["direction_logits"], dir_label, out["volatility_pred"], vol_target, date_idx)
+                losses = criterion(
+                    out["direction_logits"],
+                    dir_label,
+                    out["volatility_pred"],
+                    vol_target,
+                    date_idx,
+                )
 
             if scaler:
                 scaler.scale(losses["total"]).backward()
@@ -285,38 +346,71 @@ def retrain_v2_1_fusion(embeddings_path: str, verbose: bool = True) -> dict:
                 surp = batch["surprise_feat"].to(device_str, non_blocking=True)
                 mask_v = batch["modality_mask"].to(device_str, non_blocking=True)
                 dir_label = batch["direction_label"].to(device_str, non_blocking=True)
-                vol_target = batch["volatility_target"].to(device_str, non_blocking=True)
+                vol_target = batch["volatility_target"].to(
+                    device_str, non_blocking=True
+                )
                 date_idx = batch["date_index"].to(device_str, non_blocking=True)
 
                 with torch.amp.autocast("cuda", enabled=use_amp):
                     out = model(price, gat, doc, macro, surp, mask_v)
-                    losses = criterion(out["direction_logits"], dir_label, out["volatility_pred"], vol_target, date_idx)
+                    losses = criterion(
+                        out["direction_logits"],
+                        dir_label,
+                        out["volatility_pred"],
+                        vol_target,
+                        date_idx,
+                    )
 
                 val_loss_sum += losses["total"].item() * price.size(0)
                 valid = dir_label >= 0
                 if valid.any():
-                    val_correct += (out["direction_logits"][valid].argmax(1) == dir_label[valid]).sum().item()
+                    val_correct += (
+                        (out["direction_logits"][valid].argmax(1) == dir_label[valid])
+                        .sum()
+                        .item()
+                    )
                     val_total += valid.sum().item()
-                    probs = torch.softmax(out["direction_logits"][valid].float(), dim=1)[:, 1]
+                    probs = torch.softmax(
+                        out["direction_logits"][valid].float(), dim=1
+                    )[:, 1]
                     val_probs_list.extend(probs.cpu().tolist())
                     val_labels_list.extend(dir_label[valid].cpu().tolist())
 
         val_loss = val_loss_sum / max(val_total, 1)
         val_acc = val_correct / max(val_total, 1)
         from sklearn.metrics import roc_auc_score
-        val_auc = roc_auc_score(val_labels_list, val_probs_list) if len(set(val_labels_list)) > 1 else 0.5
+
+        val_auc = (
+            roc_auc_score(val_labels_list, val_probs_list)
+            if len(set(val_labels_list)) > 1
+            else 0.5
+        )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            save_checkpoint(model, optimizer, epoch, {"val_loss": val_loss, "val_auc": val_auc}, save_path)
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                {"val_loss": val_loss, "val_auc": val_auc},
+                save_path,
+            )
 
         if verbose:
-            print(f"  Epoch {epoch:02d} | loss={train_loss:.4f} acc={train_acc:.4f} | val_loss={val_loss:.4f} val_acc={val_acc:.4f} val_auc={val_auc:.4f}")
+            print(
+                f"  Epoch {epoch:02d} | loss={train_loss:.4f} acc={train_acc:.4f} | val_loss={val_loss:.4f} val_acc={val_acc:.4f} val_auc={val_auc:.4f}"
+            )
             if epoch == 1:
                 log_gpu_usage("  ")
             elif epoch % 5 == 0:
-                peak = torch.cuda.max_memory_allocated(0) / 1e9 if device_str == "cuda" else 0
-                print(f"    VRAM peak: {peak:.3f} GB | LR: {optimizer.param_groups[0]['lr']:.6f}")
+                peak = (
+                    torch.cuda.max_memory_allocated(0) / 1e9
+                    if device_str == "cuda"
+                    else 0
+                )
+                print(
+                    f"    VRAM peak: {peak:.3f} GB | LR: {optimizer.param_groups[0]['lr']:.6f}"
+                )
 
         if stopper(val_loss):
             if verbose:
@@ -348,18 +442,29 @@ def retrain_v2_1_fusion(embeddings_path: str, verbose: bool = True) -> dict:
             all_gates.append(out["gate_weights"].float().cpu())
             valid = dir_label >= 0
             if valid.any():
-                probs = torch.softmax(out["direction_logits"][valid].float(), dim=1)[:, 1]
+                probs = torch.softmax(out["direction_logits"][valid].float(), dim=1)[
+                    :, 1
+                ]
                 test_probs_list.extend(probs.cpu().tolist())
                 test_labels_list.extend(dir_label[valid].cpu().tolist())
 
             vol_valid = ~torch.isnan(vol_target)
             if vol_valid.any():
-                test_vol_preds.extend(out["volatility_pred"][vol_valid].float().cpu().tolist())
+                test_vol_preds.extend(
+                    out["volatility_pred"][vol_valid].float().cpu().tolist()
+                )
                 test_vol_true.extend(vol_target[vol_valid].cpu().tolist())
 
-    test_auc = roc_auc_score(test_labels_list, test_probs_list) if len(set(test_labels_list)) > 1 else 0.5
-    test_acc = np.mean(np.array(test_labels_list) == (np.array(test_probs_list) >= 0.5).astype(int))
+    test_auc = (
+        roc_auc_score(test_labels_list, test_probs_list)
+        if len(set(test_labels_list)) > 1
+        else 0.5
+    )
+    test_acc = np.mean(
+        np.array(test_labels_list) == (np.array(test_probs_list) >= 0.5).astype(int)
+    )
     from sklearn.metrics import f1_score
+
     test_f1 = f1_score(test_labels_list, (np.array(test_probs_list) >= 0.5).astype(int))
 
     # Volatility R²

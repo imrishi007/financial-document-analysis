@@ -7,6 +7,7 @@ Key design decisions:
 4. Transaction costs: 0bp, 5bp, 10bp, 20bp per trade
 5. Benchmark: equal-weight long-only all stocks (monthly rebalance)
 """
+
 from __future__ import annotations
 
 import json
@@ -49,7 +50,9 @@ def weekly_long_short_backtest(
     prices_df["date"] = pd.to_datetime(prices_df["date"])
 
     # Pivot prices to wide format
-    price_wide = prices_df.pivot(index="date", columns="ticker", values="close").sort_index()
+    price_wide = prices_df.pivot(
+        index="date", columns="ticker", values="close"
+    ).sort_index()
     tickers = sorted(price_wide.columns)
     trading_dates = sorted(price_wide.index)
 
@@ -78,8 +81,10 @@ def weekly_long_short_backtest(
             else:
                 # Try nearest date
                 for offset in range(3):
-                    for d in [rebal_date + pd.Timedelta(days=offset),
-                              rebal_date - pd.Timedelta(days=offset)]:
+                    for d in [
+                        rebal_date + pd.Timedelta(days=offset),
+                        rebal_date - pd.Timedelta(days=offset),
+                    ]:
                         if (d, t) in pred_lookup:
                             date_preds[t] = pred_lookup[(d, t)]
                             break
@@ -90,7 +95,9 @@ def weekly_long_short_backtest(
             continue
 
         # Rank by predicted UP probability
-        sorted_tickers = sorted(date_preds.keys(), key=lambda t: date_preds[t], reverse=True)
+        sorted_tickers = sorted(
+            date_preds.keys(), key=lambda t: date_preds[t], reverse=True
+        )
         long_tickers = set(sorted_tickers[:n_long])
         short_tickers = set(sorted_tickers[-n_short:])
 
@@ -135,23 +142,29 @@ def weekly_long_short_backtest(
         period_returns = period_prices.pct_change().iloc[1:]
 
         for _, day_ret in period_returns.iterrows():
-            long_ret = sum(long_weights.get(t, 0) * day_ret.get(t, 0) for t in long_tickers)
-            short_ret = -sum(short_weights.get(t, 0) * day_ret.get(t, 0) for t in short_tickers)
+            long_ret = sum(
+                long_weights.get(t, 0) * day_ret.get(t, 0) for t in long_tickers
+            )
+            short_ret = -sum(
+                short_weights.get(t, 0) * day_ret.get(t, 0) for t in short_tickers
+            )
             daily_ret = long_ret + short_ret
             daily_returns.append(daily_ret)
 
         # Transaction cost on turnover
         if turnover > 0:
             cost = cost_rate * turnover * 2  # Round-trip cost on turnover fraction
-            portfolio_value *= (1 - cost)
+            portfolio_value *= 1 - cost
 
         prev_long, prev_short = long_tickers, short_tickers
-        positions_history.append({
-            "date": str(rebal_date.date()),
-            "long": sorted(long_tickers),
-            "short": sorted(short_tickers),
-            "turnover": round(turnover, 4),
-        })
+        positions_history.append(
+            {
+                "date": str(rebal_date.date()),
+                "long": sorted(long_tickers),
+                "short": sorted(short_tickers),
+                "turnover": round(turnover, 4),
+            }
+        )
 
     # Apply daily returns to portfolio
     daily_returns = np.array(daily_returns)
@@ -180,7 +193,7 @@ def weekly_long_short_backtest(
     # Win rate (weekly)
     weekly_returns = []
     for i in range(0, len(net_daily_returns), 5):
-        chunk = net_daily_returns[i:i + 5]
+        chunk = net_daily_returns[i : i + 5]
         if len(chunk) > 0:
             weekly_returns.append(np.prod(1 + chunk) - 1)
     win_rate = np.mean(np.array(weekly_returns) > 0) if weekly_returns else 0
@@ -218,8 +231,10 @@ def run_full_backtest(
         key = "confidence_weighted" if cw else "equal_weight"
         for cost in cost_bps_list:
             r = weekly_long_short_backtest(
-                predictions, prices,
-                n_long=n_long, n_short=n_short,
+                predictions,
+                prices,
+                n_long=n_long,
+                n_short=n_short,
                 rebalance_every=rebalance_every,
                 cost_bps=cost,
                 confidence_weighted=cw,
@@ -227,8 +242,10 @@ def run_full_backtest(
             results[key][str(cost)] = r
 
             if verbose:
-                print(f"  {key}, {cost}bp: return={r['total_return']*100:.1f}%, "
-                      f"sharpe={r['sharpe']:.3f}, winrate={r['win_rate']*100:.1f}%")
+                print(
+                    f"  {key}, {cost}bp: return={r['total_return']*100:.1f}%, "
+                    f"sharpe={r['sharpe']:.3f}, winrate={r['win_rate']*100:.1f}%"
+                )
 
     # Find break-even cost
     for key in ["equal_weight", "confidence_weighted"]:

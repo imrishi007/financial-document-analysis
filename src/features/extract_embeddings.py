@@ -229,12 +229,14 @@ def extract_macro_embeddings(
     macro_features_df: pd.DataFrame,
     model_path: str | Path = "models/macro_model_best.pt",
     device: str = "cuda",
+    hidden_dim: int = 64,
+    output_dim: int = 32,
 ) -> dict[str, np.ndarray]:
     """Extract macro embeddings for each date.
 
-    If no trained macro model exists, returns raw features zero-padded to 32-d.
+    If no trained macro model exists, returns raw features zero-padded to output_dim.
 
-    Returns {date_str: np.ndarray of shape (32,)}.
+    Returns {date_str: np.ndarray of shape (output_dim,)}.
     """
     from src.data.macro_features import MACRO_FEATURE_NAMES
 
@@ -247,7 +249,7 @@ def extract_macro_embeddings(
     if model_path.exists():
         from src.models.macro_model import MacroStateModel
 
-        model = MacroStateModel(input_dim=12, hidden_dim=64, output_dim=32)
+        model = MacroStateModel(input_dim=12, hidden_dim=hidden_dim, output_dim=output_dim)
         ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         model.eval().to(device)
@@ -266,13 +268,13 @@ def extract_macro_embeddings(
         del model
         torch.cuda.empty_cache()
     else:
-        # No trained model -- use zero-padded raw features projected to 32-d
+        # No trained model -- use zero-padded raw features projected to output_dim
         for date_idx in macro_features_df.index:
             date_str = str(date_idx.date())
             feat = macro_features_df.loc[date_idx, MACRO_FEATURE_NAMES].values
             if np.any(np.isnan(feat)):
                 continue
-            padded = np.zeros(32, dtype=np.float32)
+            padded = np.zeros(output_dim, dtype=np.float32)
             padded[:12] = feat.astype(np.float32)
             embeddings[date_str] = padded
 
@@ -393,6 +395,9 @@ def extract_all_embeddings(
     save_path: str | Path = "data/embeddings/fusion_embeddings.pt",
     device: str = "cuda",
     verbose: bool = True,
+    macro_model_path: str | Path | None = None,
+    macro_hidden_dim: int = 64,
+    macro_output_dim: int = 32,
 ) -> dict[str, Any]:
     """Extract embeddings from all pretrained models and save aligned dataset.
 
@@ -515,7 +520,11 @@ def extract_all_embeddings(
         macro_scaler = MacroFeatureScaler()
         macro_scaler.fit(macro_feat, train_end="2022-12-31")
         macro_feat_norm = macro_scaler.transform(macro_feat)
-        macro_embs = extract_macro_embeddings(macro_feat_norm, device=device)
+        _macro_model = macro_model_path or "models/macro_model_best.pt"
+        macro_embs = extract_macro_embeddings(
+            macro_feat_norm, model_path=_macro_model, device=device,
+            hidden_dim=macro_hidden_dim, output_dim=macro_output_dim,
+        )
     else:
         if verbose:
             print("  WARNING: No macro data found. Macro modality unavailable.")
@@ -543,7 +552,7 @@ def extract_all_embeddings(
         )
 
     N = len(price_ds)
-    PRICE_DIM, GAT_DIM, DOC_DIM, MACRO_DIM, SURP_DIM = 256, 256, 768, 32, 5
+    PRICE_DIM, GAT_DIM, DOC_DIM, MACRO_DIM, SURP_DIM = 256, 256, 768, macro_output_dim, 5
 
     all_price = np.zeros((N, PRICE_DIM), dtype=np.float32)
     all_gat = np.zeros((N, GAT_DIM), dtype=np.float32)

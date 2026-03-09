@@ -65,12 +65,15 @@ class PriceWindowDataset(Dataset):
     For each sample, returns a window of `window_size` consecutive trading days
     of feature vectors, plus the aligned prediction targets.
 
+    PRIMARY target: 60-day direction (direction_60d)
+    Secondary targets: 5-day direction, volatility
+
     Parameters
     ----------
     price_df : DataFrame with columns [ticker, date] + feature_cols (already
         feature-engineered and optionally normalized).
-    targets_df : DataFrame with columns [ticker, date, direction_1d_id,
-        direction_5d_id] (from multi-horizon direction labels).
+    targets_df : DataFrame with columns [ticker, date, direction_5d_id,
+        direction_60d_id] (from multi-horizon direction labels).
     vol_df : Optional DataFrame with [ticker, date, realized_vol_20d_annualized].
     surprise_df : Optional DataFrame with [ticker, date, surprise_id].
     window_size : Number of consecutive days per sample.
@@ -95,9 +98,22 @@ class PriceWindowDataset(Dataset):
         price_df["date"] = pd.to_datetime(price_df["date"])
         targets_df["date"] = pd.to_datetime(targets_df["date"])
 
+        # Determine which direction columns are available
+        dir_cols = ["ticker", "date"]
+        has_5d = "direction_5d_id" in targets_df.columns
+        has_60d = "direction_60d_id" in targets_df.columns
+        has_1d = "direction_1d_id" in targets_df.columns
+
+        if has_5d:
+            dir_cols.append("direction_5d_id")
+        if has_60d:
+            dir_cols.append("direction_60d_id")
+        if has_1d:
+            dir_cols.append("direction_1d_id")
+
         # Merge price features with direction targets
         merged = price_df.merge(
-            targets_df[["ticker", "date", "direction_1d_id", "direction_5d_id"]],
+            targets_df[dir_cols],
             on=["ticker", "date"],
             how="inner",
         )
@@ -140,21 +156,21 @@ class PriceWindowDataset(Dataset):
                 window = group.iloc[i - window_size : i]
                 target_row = group.iloc[i]
 
-                self._samples.append(
-                    {
-                        "features": window[self.feature_cols].values.astype(np.float32),
-                        "direction_1d": int(target_row["direction_1d_id"]),
-                        "direction_5d": int(target_row["direction_5d_id"]),
-                        "volatility": (
-                            float(target_row["realized_vol_20d_annualized"])
-                            if not np.isnan(target_row["realized_vol_20d_annualized"])
-                            else 0.0
-                        ),
-                        "surprise_id": int(target_row.get("surprise_id", -1)),
-                        "ticker": str(ticker),
-                        "date": str(target_row["date"].date()),
-                    }
-                )
+                sample = {
+                    "features": window[self.feature_cols].values.astype(np.float32),
+                    "direction_5d": int(target_row.get("direction_5d_id", -1)),
+                    "direction_60d": int(target_row.get("direction_60d_id", -1)),
+                    "direction_1d": int(target_row.get("direction_1d_id", -1)),
+                    "volatility": (
+                        float(target_row["realized_vol_20d_annualized"])
+                        if not np.isnan(target_row["realized_vol_20d_annualized"])
+                        else 0.0
+                    ),
+                    "surprise_id": int(target_row.get("surprise_id", -1)),
+                    "ticker": str(ticker),
+                    "date": str(target_row["date"].date()),
+                }
+                self._samples.append(sample)
 
         if not self._samples:
             raise ValueError("No valid windows could be created. Check data.")
@@ -166,8 +182,9 @@ class PriceWindowDataset(Dataset):
         s = self._samples[idx]
         return {
             "features": torch.from_numpy(s["features"]),  # [window, F]
-            "direction_1d": torch.tensor(s["direction_1d"], dtype=torch.long),
+            "direction_60d": torch.tensor(s["direction_60d"], dtype=torch.long),
             "direction_5d": torch.tensor(s["direction_5d"], dtype=torch.long),
+            "direction_1d": torch.tensor(s["direction_1d"], dtype=torch.long),
             "volatility": torch.tensor(s["volatility"], dtype=torch.float32),
             "surprise_id": torch.tensor(s["surprise_id"], dtype=torch.long),
             "ticker": s["ticker"],

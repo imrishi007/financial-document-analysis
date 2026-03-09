@@ -32,12 +32,14 @@ from src.train.common import (
     create_optimizer,
     evaluate_epoch,
     save_checkpoint,
+    make_dataloader,
 )
 from src.utils.seed import set_global_seed
+from src.utils.gpu import setup_gpu, log_gpu_usage, create_grad_scaler
 
 
 # ---------------------------------------------------------------------------
-# Train one epoch
+# Train one epoch (with AMP)
 # ---------------------------------------------------------------------------
 
 
@@ -47,25 +49,41 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: str,
+    scaler: torch.amp.GradScaler | None = None,
+    use_amp: bool = True,
+    accumulation_steps: int = 1,
 ) -> dict[str, float]:
-    """Train for one epoch and return average loss + accuracy."""
+    """Train for one epoch with AMP and gradient accumulation."""
     model.train()
     loss_sum = 0.0
     correct = 0
     total = 0
 
-    for batch in loader:
-        features = batch["features"].to(device)
-        labels = batch["direction_1d"].to(device)
+    optimizer.zero_grad()
+    for step, batch in enumerate(loader):
+        features = batch["features"].to(device, non_blocking=True)
+        labels = batch["direction_60d"].to(device, non_blocking=True)
 
-        logits = model(features)
-        loss = criterion(logits, labels)
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            logits = model(features)
+            loss = criterion(logits, labels) / accumulation_steps
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if (step + 1) % accumulation_steps == 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+        else:
+            loss.backward()
+            if (step + 1) % accumulation_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
 
-        loss_sum += loss.item() * features.size(0)
+        loss_sum += loss.item() * accumulation_steps * features.size(0)
         preds = logits.argmax(dim=1)
         correct += (preds == labels).sum().item()
         total += features.size(0)
@@ -117,14 +135,19 @@ def run_price_training(
     Returns a dict with training history, final metrics, and the trained model.
     """
     if config is None:
-        config = TrainingConfig()
+        config = TrainingConfig(batch_size=512)
     if split_cfg is None:
         split_cfg = SplitConfig()
 
-    device = config.resolve_device()
+    # GPU setup
+    device_obj = setup_gpu(verbose=verbose)
+    device = str(device_obj)
     set_global_seed(config.seed)
+    use_amp = config.use_amp and device == "cuda"
+    scaler = create_grad_scaler() if use_amp else None
+
     if verbose:
-        print(f"Device: {device} | Seed: {config.seed}")
+        print(f"Device: {device} | Seed: {config.seed} | AMP: {use_amp}")
 
     # ------------------------------------------------------------------
     # 1. Load data
@@ -143,8 +166,8 @@ def run_price_training(
     train_end = pd.Timestamp(split_cfg.train_end)
     train_mask = dates_series <= train_end
 
-    scaler = fit_scaler(price_feat[train_mask], ENGINEERED_FEATURES)
-    price_feat = scaler.transform(price_feat, ENGINEERED_FEATURES)
+    scaler_feat = fit_scaler(price_feat[train_mask], ENGINEERED_FEATURES)
+    price_feat = scaler_feat.transform(price_feat, ENGINEERED_FEATURES)
 
     if verbose:
         print(f"Features scaled (z-score fit on {train_mask.sum()} train rows)")
@@ -169,9 +192,15 @@ def run_price_training(
             f"Samples — train: {len(train_ds)}, val: {len(val_ds)}, test: {len(test_ds)}"
         )
 
-    train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=config.batch_size)
-    test_loader = DataLoader(test_ds, batch_size=config.batch_size)
+    train_loader = make_dataloader(
+        train_ds, batch_size=config.batch_size, shuffle=True, config=config
+    )
+    val_loader = make_dataloader(
+        val_ds, batch_size=config.batch_size * 2, config=config
+    )
+    test_loader = make_dataloader(
+        test_ds, batch_size=config.batch_size * 2, config=config
+    )
 
     # ------------------------------------------------------------------
     # 4. Build model
@@ -184,6 +213,7 @@ def run_price_training(
     if verbose:
         n_params = sum(p.numel() for p in model.parameters())
         print(f"PriceDirectionModel — {n_params:,} parameters")
+        log_gpu_usage("  After model load: ")
 
     # ------------------------------------------------------------------
     # 5. Training loop
@@ -193,7 +223,14 @@ def run_price_training(
 
     for epoch in range(1, config.epochs + 1):
         train_metrics = train_one_epoch(
-            model, train_loader, optimizer, criterion, device
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            scaler=scaler,
+            use_amp=use_amp,
+            accumulation_steps=config.gradient_accumulation_steps,
         )
         val_result = evaluate_epoch(model, val_loader, criterion, device)
         val_cls = classification_metrics(
@@ -227,6 +264,8 @@ def run_price_training(
                 f"val_acc={val_cls['accuracy']:.4f} "
                 f"val_f1={val_cls['f1']:.4f}"
             )
+            if epoch == 1:
+                log_gpu_usage("  ")
 
         if stopper(val_result["loss"]):
             if verbose:
@@ -248,11 +287,14 @@ def run_price_training(
     baseline_acc = majority_baseline_accuracy(test_result["y_true"])
 
     if verbose:
-        print(f"\n  Test results (best model):")
+        print(f"\n  Test results (best model) — 60-day direction:")
         print(f"    Loss: {test_result['loss']:.4f}")
         for k, v in test_cls.items():
             print(f"    {k}: {v:.4f}")
         print(f"    Majority baseline accuracy: {baseline_acc:.4f}")
+        log_gpu_usage("  Final: ")
+
+    print("\n=== STEP 1 (Price Model) GPU + AMP COMPLETE ===")
 
     return {
         "model": model,

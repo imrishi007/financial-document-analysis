@@ -4,6 +4,8 @@ The document model predicts stock direction from 10-K filings. Since each
 filing is a single sample (95 total), the model is trained with FinBERT
 frozen and only the attention-pooling + classifier head learns.
 
+V2: AMP + GPU optimization, setup_gpu diagnostics.
+
 Usage::
 
     from src.train.train_document import run_document_training
@@ -23,6 +25,7 @@ import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
+
 from transformers import AutoTokenizer
 
 from src.data.document_dataset import DocumentChunkDataset
@@ -34,6 +37,7 @@ from src.train.common import (
     create_optimizer,
     save_checkpoint,
 )
+from src.utils.gpu import setup_gpu, log_gpu_usage, create_grad_scaler
 from src.utils.seed import set_global_seed
 
 
@@ -87,7 +91,7 @@ class DocumentDirectionDataset(Dataset):
             if len(subset) < 20:
                 continue  # skip filings without enough future data
 
-            label = int(subset["direction_1d_id"].mode().iloc[0])
+            label = int(subset["direction_60d_id"].mode().iloc[0])
 
             self._samples.append(
                 {
@@ -126,6 +130,8 @@ def _encode_chunked_batch(
     num_chunks: torch.Tensor,
     device: str,
     chunk_batch_size: int = 8,
+    *,
+    use_amp: bool = False,
 ) -> torch.Tensor:
     """Encode a batch of chunked documents through FinBERT and aggregate.
 
@@ -151,7 +157,7 @@ def _encode_chunked_batch(
             mini_ids = ids[start:end].to(device)
             mini_mask = mask[start:end].to(device)
 
-            with torch.no_grad():
+            with torch.no_grad(), torch.amp.autocast("cuda", enabled=use_amp):
                 enc_out = model.encoder(input_ids=mini_ids, attention_mask=mini_mask)
                 chunk_cls_list.append(enc_out.last_hidden_state[:, 0, :].cpu())
 
@@ -175,13 +181,16 @@ def train_one_epoch_doc(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: str,
+    *,
+    use_amp: bool = False,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> dict[str, float]:
-    """Train classifier head for one epoch (encoder is frozen)."""
+    """Train classifier head for one epoch (encoder is frozen) with optional AMP."""
     model.train()
     loss_sum, correct, total = 0.0, 0, 0
 
     for batch in loader:
-        labels = batch["label"].to(device)
+        labels = batch["label"].to(device, non_blocking=True)
 
         # Get frozen embeddings (returned on CPU to save VRAM)
         embeddings = _encode_chunked_batch(
@@ -190,16 +199,23 @@ def train_one_epoch_doc(
             batch["attention_mask"],
             batch["num_chunks"],
             device,
+            use_amp=use_amp,
         )
         embeddings = embeddings.detach().to(device)  # move to GPU for head
 
-        # Forward through trainable head
-        logits = model.head(embeddings)
-        loss = criterion(logits, labels)
+        # Forward through trainable head with AMP
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            logits = model.head(embeddings)
+            loss = criterion(logits, labels)
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         loss_sum += loss.item() * labels.size(0)
         correct += (logits.argmax(1) == labels).sum().item()
@@ -217,25 +233,28 @@ def evaluate_doc(
     loader: DataLoader,
     criterion: nn.Module,
     device: str,
+    *,
+    use_amp: bool = False,
 ) -> dict[str, Any]:
-    """Evaluate document model and return predictions."""
+    """Evaluate document model and return predictions with optional AMP."""
     model.eval()
     loss_sum, total = 0.0, 0
     all_preds, all_labels, all_probs = [], [], []
 
     for batch in loader:
-        labels = batch["label"].to(device)
+        labels = batch["label"].to(device, non_blocking=True)
         embeddings = _encode_chunked_batch(
             model,
             batch["input_ids"],
             batch["attention_mask"],
             batch["num_chunks"],
             device,
-        ).to(
-            device
-        )  # move from CPU to GPU for head
-        logits = model.head(embeddings)
-        loss = criterion(logits, labels)
+            use_amp=use_amp,
+        ).to(device)
+
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            logits = model.head(embeddings)
+            loss = criterion(logits, labels)
 
         probs = torch.softmax(logits, dim=1)[:, 1]
         loss_sum += loss.item() * labels.size(0)
@@ -265,17 +284,22 @@ def run_document_training(
     save_dir: str | Path = "models",
     verbose: bool = True,
 ) -> dict[str, Any]:
-    """End-to-end document model training.
+    """End-to-end document model training with AMP support.
 
     FinBERT is frozen; only the classifier head is trained.
     """
     if config is None:
         config = TrainingConfig(epochs=30, patience=8, batch_size=4)
 
-    device = config.resolve_device()
+    gpu_device = setup_gpu(verbose=verbose)
+    device = str(gpu_device)
     set_global_seed(config.seed)
+
+    use_amp = config.use_amp and device == "cuda"
+    scaler = create_grad_scaler() if use_amp else None
+
     if verbose:
-        print(f"Device: {device} | Backbone: {backbone}")
+        print(f"Device: {device} | Backbone: {backbone} | AMP: {use_amp}")
 
     # ------------------------------------------------------------------
     # 1. Build document dataset
@@ -343,13 +367,21 @@ def run_document_training(
 
     for epoch in range(1, config.epochs + 1):
         train_metrics = train_one_epoch_doc(
-            model, train_loader, optimizer, criterion, device
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            use_amp=use_amp,
+            scaler=scaler,
         )
 
         row = {"epoch": epoch, **train_metrics}
 
         if val_loader is not None:
-            val_result = evaluate_doc(model, val_loader, criterion, device)
+            val_result = evaluate_doc(
+                model, val_loader, criterion, device, use_amp=use_amp
+            )
             val_cls = classification_metrics(
                 val_result["y_true"],
                 val_result["y_pred"],
@@ -388,6 +420,8 @@ def run_document_training(
                 f"  Epoch {epoch:02d} | train_loss={train_metrics['train_loss']:.4f} "
                 f"train_acc={train_metrics['train_acc']:.4f} | {val_info}"
             )
+            if epoch == 1:
+                log_gpu_usage("  [Epoch 1] ")
 
     # ------------------------------------------------------------------
     # 5. Evaluate on test
@@ -401,7 +435,9 @@ def run_document_training(
             ckpt = torch.load(best_path, weights_only=False, map_location=device)
             model.load_state_dict(ckpt["model_state_dict"])
 
-        test_result = evaluate_doc(model, test_loader, criterion, device)
+        test_result = evaluate_doc(
+            model, test_loader, criterion, device, use_amp=use_amp
+        )
         test_metrics = classification_metrics(
             test_result["y_true"],
             test_result["y_pred"],

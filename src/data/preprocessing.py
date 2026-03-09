@@ -166,7 +166,7 @@ def tokenize_short_text(
     tokenizer,
     max_length: int = 128,
 ) -> dict:
-    """Tokenize a short text (news title/summary) with truncation and padding.
+    """Tokenize a short text with truncation and padding.
 
     Returns dict with 'input_ids' and 'attention_mask' as lists.
     """

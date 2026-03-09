@@ -28,15 +28,26 @@ def main() -> None:
     data_cfg = config["data"]
     labels_cfg = config.get("labels", {})
 
-    # ---- Download prices ----
+    # ---- Download prices (skip if CSV already exists) ----
     all_prices = []
+    prices_dir = Path("data/raw/prices")
     for ticker in data_cfg["tickers"]:
-        request = PriceRequest(
-            ticker=ticker,
-            start_date=data_cfg["start_date"],
-            end_date=data_cfg["end_date"],
-        )
-        all_prices.append(download_price_history(request))
+        csv_path = prices_dir / f"{ticker}_ohlcv.csv"
+        if csv_path.exists():
+            print(f"  [SKIP] {ticker}: loading from {csv_path}")
+            df = pd.read_csv(csv_path)
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            all_prices.append(df)
+        else:
+            request = PriceRequest(
+                ticker=ticker,
+                start_date=data_cfg["start_date"],
+                end_date=data_cfg["end_date"],
+            )
+            df = download_price_history(request)
+            prices_dir.mkdir(parents=True, exist_ok=True)
+            df.to_csv(csv_path, index=False)
+            all_prices.append(df)
 
     prices = pd.concat(all_prices, axis=0, ignore_index=True)
     price_subset = prices[["ticker", "date", "close"]].copy()
@@ -44,18 +55,20 @@ def main() -> None:
     targets_dir = Path("data/targets")
     targets_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- 1. Legacy single-horizon direction labels (backward compat) ----
+    # ---- 1. Legacy single-horizon direction labels (60-day primary) ----
     labels = build_binary_direction_labels(
         prices=price_subset,
         horizon_days=int(target_cfg["horizon_days"]),
         threshold=float(target_cfg["threshold"]),
     )
     labels.to_csv(targets_dir / "direction_labels.csv", index=False)
-    print(f"[direction_labels.csv] {len(labels)} rows")
+    print(
+        f"[direction_labels.csv] {len(labels)} rows (horizon={target_cfg['horizon_days']}d)"
+    )
     print(f"  {labels['target_label'].value_counts().to_dict()}")
 
-    # ---- 2. Multi-horizon direction labels ----
-    horizons = [int(h) for h in target_cfg.get("horizons", [1, 3, 5])]
+    # ---- 2. Multi-horizon direction labels (5d + 60d) ----
+    horizons = [int(h) for h in target_cfg.get("horizons", [5, 60])]
     multi_labels = build_multi_horizon_direction_labels(
         prices=price_subset,
         horizons=horizons,
@@ -98,6 +111,18 @@ def main() -> None:
         print(f"  {surprise_targets['surprise_label'].value_counts().to_dict()}")
     else:
         print(f"\n[SKIP] Earnings CSV not found at {earnings_csv}")
+
+    # ---- 5. Download macro data ----
+    from src.data.macro_features import download_macro_data
+
+    print("\n[macro] Downloading macro data...")
+    try:
+        download_macro_data(
+            start_date="2015-06-01",
+            end_date=data_cfg["end_date"],
+        )
+    except Exception as e:
+        print(f"  WARNING: Macro data download failed: {e}")
 
     print("\nAll targets saved to data/targets/")
 

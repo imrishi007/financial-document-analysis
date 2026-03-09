@@ -1,13 +1,15 @@
-"""Phase 5 — Train Graph-Enhanced Direction Model (GAT).
+"""Phase 5 -- Train Graph-Enhanced Direction Model (GAT).
 
 Pipeline
 --------
 1. Load price features + direction labels
 2. Build ``GraphSnapshotDataset`` (all 10 companies per date)
-3. Load static graph → edge_index, edge_weight
-4. Split by date: train ≤ 2022, val = 2023, test ≥ 2024
-5. Train ``GraphEnhancedModel`` (CNN-LSTM → GAT → classifier)
+3. Load static graph -> edge_index, edge_weight
+4. Split by date: train <= 2022, val = 2023, test >= 2024
+5. Train ``GraphEnhancedModel`` (CNN-LSTM -> GAT -> classifier)
 6. Evaluate with / without GAT (ablation baseline)
+
+V2: AMP + GPU optimization, 60-day direction as primary target.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from src.train.common import (
     TrainingConfig,
     save_checkpoint,
 )
+from src.utils.gpu import setup_gpu, log_gpu_usage, create_grad_scaler
 
 
 # ---------------------------------------------------------------------------
@@ -86,15 +89,18 @@ def train_one_epoch(
     edge_index: torch.Tensor,
     edge_weight: torch.Tensor,
     device: str,
+    *,
+    use_amp: bool = False,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> dict[str, float]:
-    """Train for one epoch over graph snapshots."""
+    """Train for one epoch over graph snapshots with optional AMP."""
     model.train()
     loss_sum, correct, total = 0.0, 0, 0
 
     for batch in loader:
-        features = batch["features"].to(device)  # [B, N, T, F]
-        labels = batch["labels"].to(device)  # [B, N]
-        mask = batch["mask"].to(device)  # [B, N]
+        features = batch["features"].to(device, non_blocking=True)  # [B, N, T, F]
+        labels = batch["labels"].to(device, non_blocking=True)  # [B, N]
+        mask = batch["mask"].to(device, non_blocking=True)  # [B, N]
 
         B, N, T, F = features.shape
 
@@ -103,35 +109,44 @@ def train_one_epoch(
         batch_correct = 0
         batch_total = 0
 
-        for b in range(B):
-            x = features[b]  # [N, T, F]
-            y = labels[b]  # [N]
-            m = mask[b]  # [N]
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            for b in range(B):
+                x = features[b]  # [N, T, F]
+                y = labels[b]  # [N]
+                m = mask[b]  # [N]
 
-            if m.sum() == 0:
-                continue
+                if m.sum() == 0:
+                    continue
 
-            logits = model(x, edge_index, edge_weight)  # [N, 2]
+                logits = model(x, edge_index, edge_weight)  # [N, 2]
 
-            # Only compute loss for valid (non-masked) companies
-            valid_logits = logits[m]
-            valid_labels = y[m]
+                # Only compute loss for valid (non-masked) companies
+                valid_logits = logits[m]
+                valid_labels = y[m]
 
-            loss = criterion(valid_logits, valid_labels)
-            batch_loss = batch_loss + loss
+                loss = criterion(valid_logits, valid_labels)
+                batch_loss = batch_loss + loss
 
-            preds = valid_logits.argmax(dim=1)
-            batch_correct += (preds == valid_labels).sum().item()
-            batch_total += valid_labels.size(0)
+                preds = valid_logits.argmax(dim=1)
+                batch_correct += (preds == valid_labels).sum().item()
+                batch_total += valid_labels.size(0)
 
         if batch_total == 0:
             continue
 
         avg_loss = batch_loss / B
         optimizer.zero_grad()
-        avg_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+
+        if scaler is not None:
+            scaler.scale(avg_loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            avg_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
         loss_sum += batch_loss.item()
         correct += batch_correct
@@ -151,39 +166,42 @@ def evaluate(
     edge_index: torch.Tensor,
     edge_weight: torch.Tensor,
     device: str,
+    *,
+    use_amp: bool = False,
 ) -> dict[str, Any]:
-    """Evaluate model and return predictions."""
+    """Evaluate model and return predictions with optional AMP."""
     model.eval()
     loss_sum, total = 0.0, 0
     all_preds, all_labels, all_probs = [], [], []
 
     for batch in loader:
-        features = batch["features"].to(device)
-        labels = batch["labels"].to(device)
-        mask = batch["mask"].to(device)
+        features = batch["features"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
+        mask = batch["mask"].to(device, non_blocking=True)
 
         B, N, T, F = features.shape
 
-        for b in range(B):
-            x = features[b]
-            y = labels[b]
-            m = mask[b]
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            for b in range(B):
+                x = features[b]
+                y = labels[b]
+                m = mask[b]
 
-            if m.sum() == 0:
-                continue
+                if m.sum() == 0:
+                    continue
 
-            logits = model(x, edge_index, edge_weight)
-            valid_logits = logits[m]
-            valid_labels = y[m]
+                logits = model(x, edge_index, edge_weight)
+                valid_logits = logits[m]
+                valid_labels = y[m]
 
-            loss = criterion(valid_logits, valid_labels)
-            probs = torch.softmax(valid_logits, dim=1)[:, 1]
+                loss = criterion(valid_logits, valid_labels)
+                probs = torch.softmax(valid_logits, dim=1)[:, 1]
 
-            loss_sum += loss.item() * valid_labels.size(0)
-            all_preds.extend(valid_logits.argmax(1).cpu().tolist())
-            all_labels.extend(valid_labels.cpu().tolist())
-            all_probs.extend(probs.cpu().tolist())
-            total += valid_labels.size(0)
+                loss_sum += loss.item() * valid_labels.size(0)
+                all_preds.extend(valid_logits.argmax(1).cpu().tolist())
+                all_labels.extend(valid_labels.cpu().tolist())
+                all_probs.extend(probs.cpu().tolist())
+                total += valid_labels.size(0)
 
     return {
         "loss": loss_sum / max(total, 1),
@@ -206,7 +224,7 @@ def run_graph_training(
     save_dir: str | Path = "models",
     verbose: bool = True,
 ) -> dict[str, Any]:
-    """Full Phase 5 GAT training pipeline."""
+    """Full Phase 5 GAT training pipeline with AMP."""
 
     config = TrainingConfig(
         learning_rate=5e-4,
@@ -215,13 +233,18 @@ def run_graph_training(
         batch_size=8,
         patience=7,
         seed=42,
+        use_amp=True,
     )
-    device = config.resolve_device()
+    gpu_device = setup_gpu(verbose=verbose)
+    device = str(gpu_device)
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
 
+    use_amp = config.use_amp and device == "cuda"
+    scaler = create_grad_scaler() if use_amp else None
+
     if verbose:
-        print(f"Device: {device}")
+        print(f"Device: {device} | AMP: {use_amp}")
 
     # --- 1. Load graph ---
     graph = load_graph(graph_nodes_csv, graph_edges_csv)
@@ -286,11 +309,25 @@ def run_graph_training(
 
     for epoch in range(1, config.epochs + 1):
         train_metrics = train_one_epoch(
-            model, train_loader, optimizer, criterion, edge_index, edge_weight, device
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            edge_index,
+            edge_weight,
+            device,
+            use_amp=use_amp,
+            scaler=scaler,
         )
 
         val_result = evaluate(
-            model, val_loader, criterion, edge_index, edge_weight, device
+            model,
+            val_loader,
+            criterion,
+            edge_index,
+            edge_weight,
+            device,
+            use_amp=use_amp,
         )
         val_cls = classification_metrics(
             val_result["y_true"], val_result["y_pred"], val_result["y_prob"]
@@ -322,6 +359,8 @@ def run_graph_training(
                 f"val_loss={val_result['loss']:.4f} "
                 f"val_acc={val_cls['accuracy']:.4f}"
             )
+            if epoch == 1:
+                log_gpu_usage("  [Epoch 1] ")
 
         if stopper(val_result["loss"]):
             if verbose:
@@ -338,7 +377,13 @@ def run_graph_training(
         model.load_state_dict(ckpt["model_state_dict"])
 
     test_result = evaluate(
-        model, test_loader, criterion, edge_index, edge_weight, device
+        model,
+        test_loader,
+        criterion,
+        edge_index,
+        edge_weight,
+        device,
+        use_amp=use_amp,
     )
     test_metrics = classification_metrics(
         test_result["y_true"], test_result["y_pred"], test_result["y_prob"]
@@ -354,7 +399,14 @@ def run_graph_training(
     # --- 6. Ablation: No-GAT baseline ---
     # Create the same model but bypass GAT (just encoder + head)
     no_gat_metrics = _run_no_gat_ablation(
-        dataset, train_idx, val_idx, test_idx, config, device, verbose
+        dataset,
+        train_idx,
+        val_idx,
+        test_idx,
+        config,
+        device,
+        verbose,
+        use_amp=use_amp,
     )
 
     return {
@@ -425,6 +477,8 @@ def _run_no_gat_ablation(
     config: TrainingConfig,
     device: str,
     verbose: bool,
+    *,
+    use_amp: bool = False,
 ) -> dict:
     """Train the same encoder architecture without GAT for ablation."""
     if verbose:
@@ -438,6 +492,7 @@ def _run_no_gat_ablation(
     )
     criterion = nn.CrossEntropyLoss()
     stopper = EarlyStopping(patience=config.patience)
+    scaler = create_grad_scaler() if use_amp else None
 
     train_loader = DataLoader(
         Subset(dataset, train_idx), batch_size=config.batch_size, shuffle=True
@@ -456,9 +511,9 @@ def _run_no_gat_ablation(
         model.train()
         loss_sum, correct, total = 0.0, 0, 0
         for batch in train_loader:
-            features = batch["features"].to(device)
-            labels = batch["labels"].to(device)
-            mask = batch["mask"].to(device)
+            features = batch["features"].to(device, non_blocking=True)
+            labels = batch["labels"].to(device, non_blocking=True)
+            mask = batch["mask"].to(device, non_blocking=True)
             B, N, T, F = features.shape
 
             for b_i in range(B):
@@ -468,12 +523,21 @@ def _run_no_gat_ablation(
                 x = features[b_i][m]  # [valid_N, T, F]
                 y = labels[b_i][m]  # [valid_N]
 
-                logits = model(x)
-                loss = criterion(logits, y)
+                with torch.amp.autocast("cuda", enabled=use_amp):
+                    logits = model(x)
+                    loss = criterion(logits, y)
+
                 optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
 
                 loss_sum += loss.item() * y.size(0)
                 correct += (logits.argmax(1) == y).sum().item()
@@ -488,9 +552,9 @@ def _run_no_gat_ablation(
         v_loss_sum, v_total = 0.0, 0
         with torch.no_grad():
             for batch in val_loader:
-                features = batch["features"].to(device)
-                labels_b = batch["labels"].to(device)
-                mask_b = batch["mask"].to(device)
+                features = batch["features"].to(device, non_blocking=True)
+                labels_b = batch["labels"].to(device, non_blocking=True)
+                mask_b = batch["mask"].to(device, non_blocking=True)
                 B, N, T, F = features.shape
                 for b_i in range(B):
                     m = mask_b[b_i]
@@ -498,8 +562,9 @@ def _run_no_gat_ablation(
                         continue
                     x = features[b_i][m]
                     y = labels_b[b_i][m]
-                    logits = model(x)
-                    loss = criterion(logits, y)
+                    with torch.amp.autocast("cuda", enabled=use_amp):
+                        logits = model(x)
+                        loss = criterion(logits, y)
                     v_loss_sum += loss.item() * y.size(0)
                     v_preds.extend(logits.argmax(1).cpu().tolist())
                     v_labels_list.extend(y.cpu().tolist())
@@ -542,9 +607,9 @@ def _run_no_gat_ablation(
     t_preds, t_labels_list, t_probs = [], [], []
     with torch.no_grad():
         for batch in test_loader:
-            features = batch["features"].to(device)
-            labels_b = batch["labels"].to(device)
-            mask_b = batch["mask"].to(device)
+            features = batch["features"].to(device, non_blocking=True)
+            labels_b = batch["labels"].to(device, non_blocking=True)
+            mask_b = batch["mask"].to(device, non_blocking=True)
             B, N, T, F = features.shape
             for b_i in range(B):
                 m = mask_b[b_i]
@@ -552,7 +617,8 @@ def _run_no_gat_ablation(
                     continue
                 x = features[b_i][m]
                 y = labels_b[b_i][m]
-                logits = model(x)
+                with torch.amp.autocast("cuda", enabled=use_amp):
+                    logits = model(x)
                 t_preds.extend(logits.argmax(1).cpu().tolist())
                 t_labels_list.extend(y.cpu().tolist())
                 t_probs.extend(torch.softmax(logits, 1)[:, 1].cpu().tolist())

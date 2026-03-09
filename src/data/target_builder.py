@@ -175,7 +175,11 @@ def build_fundamental_surprise_targets(
     merged_rows = []
     for ticker in earn["ticker"].unique():
         tick_earn = earn[earn["ticker"] == ticker].copy()
-        tick_prices = base[base["ticker"] == ticker]["date"].sort_values().values
+        tick_prices = (
+            pd.to_datetime(base[base["ticker"] == ticker]["date"])
+            .sort_values()
+            .values.astype("datetime64[ns]")
+        )
 
         if len(tick_prices) == 0:
             continue
@@ -183,7 +187,9 @@ def build_fundamental_surprise_targets(
         for _, row in tick_earn.iterrows():
             ann_date = row["announcement_date"]
             # Find nearest trading date (on or after announcement)
-            idx = np.searchsorted(tick_prices, ann_date, side="left")
+            idx = np.searchsorted(
+                tick_prices, np.datetime64(ann_date, "ns"), side="left"
+            )
             if idx >= len(tick_prices):
                 idx = len(tick_prices) - 1
             nearest = pd.Timestamp(tick_prices[idx])

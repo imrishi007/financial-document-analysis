@@ -1,8 +1,12 @@
 """Data loading, target construction, preprocessing, and dataset pipelines."""
 
 from src.data.document_dataset import DocumentChunkDataset, load_processed_filings
+from src.data.macro_features import (
+    build_macro_feature_vectors,
+    MacroFeatureScaler,
+    MACRO_TICKERS,
+)
 from src.data.multimodal_dataset import MultimodalAlignedDataset
-from src.data.news_dataset import NewsWindowDataset, load_news_articles
 from src.data.preprocessing import (
     FeatureScaler,
     SplitConfig,
@@ -43,9 +47,10 @@ __all__ = [
     # Documents
     "DocumentChunkDataset",
     "load_processed_filings",
-    # News
-    "NewsWindowDataset",
-    "load_news_articles",
+    # Macro
+    "build_macro_feature_vectors",
+    "MacroFeatureScaler",
+    "MACRO_TICKERS",
     # Multimodal
     "MultimodalAlignedDataset",
     # Targets

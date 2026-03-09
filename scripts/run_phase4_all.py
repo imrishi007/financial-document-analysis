@@ -128,32 +128,11 @@ torch.cuda.empty_cache() if torch.cuda.is_available() else None
 # 4C: News Temporal Model (FinBERT + BiGRU)
 # ======================================================================
 print("\n" + "=" * 70)
-print("4C: News Temporal Model (FinBERT + BiGRU)")
+print("4C: News Temporal Model -- REMOVED IN V2")
 print("=" * 70)
-
-try:
-    from src.train.train_news import run_news_training
-
-    t0 = time.time()
-    # Batch size 4 for GPU memory — 16 articles * 128 tokens per sample
-    news_results = run_news_training(
-        config=TrainingConfig(epochs=15, patience=5, batch_size=4, seed=42),
-        verbose=True,
-    )
-    elapsed = time.time() - t0
-
-    results_summary["news"] = {
-        "status": "OK",
-        "test_metrics": news_results.get("test_metrics", {}),
-        "baseline_accuracy": news_results.get("baseline_accuracy", 0),
-        "epochs_trained": len(news_results.get("history", [])),
-        "time_seconds": round(elapsed, 1),
-    }
-    print(f"\n  4C completed in {elapsed:.1f}s")
-
-except Exception as e:
-    traceback.print_exc()
-    results_summary["news"] = {"status": "FAILED", "error": str(e)}
+print("  Skipped: train_news.py was removed. News had <2% coverage and negligible")
+print("  gate weight. Use run_v2_pipeline.py for the V2 pipeline.")
+results_summary["news"] = {"status": "SKIPPED", "reason": "removed in V2"}
 
 torch.cuda.empty_cache() if torch.cuda.is_available() else None
 

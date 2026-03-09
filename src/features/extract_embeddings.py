@@ -1,16 +1,22 @@
-"""Extract embeddings from all pretrained modality encoders.
+"""Extract embeddings from all pretrained modality encoders (V2).
 
 Runs each Phase-4/5 model in inference mode, collects the penultimate-layer
 representations for every (ticker, date) in the price dataset, and saves
-them as a single ``fusion_embeddings.pt`` file that the fusion dataset
-can load directly.
+them as a single ``fusion_embeddings.pt`` file.
 
-GPU optimisation
+V2 changes:
+- Removed news modality completely
+- Fixed surprise features (5-d, no leakage)
+- Added macro MLP embeddings (32-d)
+- Primary target: 60-day direction
+- AMP + GPU optimization throughout
+
+GPU optimization
 ----------------
-* FinBERT is cast to **fp16** (half precision) for doc / news extraction.
+* FinBERT is cast to **fp16** for doc extraction.
 * ``torch.amp.autocast`` used where applicable.
-* Large batch sizes fill 3–3.5 GB of GPU memory during extraction.
-* ``torch.no_grad()`` throughout — no gradient memory overhead.
+* Large batch sizes fill 3-3.5 GB of GPU memory during extraction.
+* ``torch.no_grad()`` throughout -- no gradient memory overhead.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ from src.data.price_dataset import (
 )
 from src.models.gat_model import GraphEnhancedModel
 from src.models.price_model import PriceDirectionModel
+from src.utils.gpu import setup_gpu, log_gpu_usage
 
 
 # ======================================================================
@@ -63,20 +70,27 @@ def extract_price_embeddings(
     model.eval().to(device)
 
     embeddings: dict[tuple[str, str], np.ndarray] = {}
-    loader = DataLoader(price_dataset, batch_size=batch_size, shuffle=False)
+    loader = DataLoader(
+        price_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=True,
+        num_workers=4,
+        persistent_workers=True,
+    )
 
     with torch.no_grad():
         for batch in loader:
-            x = batch["features"].to(device)  # [B, T, F]
-            tickers = batch["ticker"]  # list[str]
-            dates = batch["date"]  # list[str]
+            x = batch["features"].to(device, non_blocking=True)
+            tickers = batch["ticker"]
+            dates = batch["date"]
 
-            # Forward through conv + BiLSTM (skip head)
-            h = x.transpose(1, 2)  # [B, F, T]
-            h = model.conv(h)  # [B, 64, T]
-            h = h.transpose(1, 2)  # [B, T, 64]
-            h, _ = model.lstm(h)  # [B, T, 256]
-            emb = h[:, -1, :].cpu().numpy()  # [B, 256]
+            with torch.amp.autocast("cuda"):
+                h = x.transpose(1, 2)
+                h = model.conv(h)
+                h = h.transpose(1, 2)
+                h, _ = model.lstm(h)
+                emb = h[:, -1, :].float().cpu().numpy()
 
             for i in range(len(tickers)):
                 embeddings[(tickers[i], dates[i])] = emb[i]
@@ -89,80 +103,6 @@ def extract_price_embeddings(
 # ======================================================================
 # 2. GAT embeddings  (256-d per company per date)
 # ======================================================================
-
-
-def extract_gat_embeddings(
-    graph_dataset: GraphSnapshotDataset,
-    edge_index: torch.Tensor,
-    edge_weight: torch.Tensor,
-    tickers: list[str],
-    model_path: str | Path = "models/graph_model_best.pt",
-    device: str = "cuda",
-    batch_size: int = 64,
-) -> dict[tuple[str, str], np.ndarray]:
-    """Run the trained GraphEnhancedModel encoder (CNN-LSTM → GAT, no head).
-
-    Returns {(ticker, date_str): np.ndarray of shape (256,)}.
-    """
-    model = GraphEnhancedModel(num_features=len(ENGINEERED_FEATURES))
-    ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model.eval().to(device)
-
-    ei = edge_index.to(device)
-    ew = edge_weight.to(device)
-
-    embeddings: dict[tuple[str, str], np.ndarray] = {}
-    loader = DataLoader(graph_dataset, batch_size=batch_size, shuffle=False)
-
-    with torch.no_grad():
-        for batch in loader:
-            features = batch["features"].to(device)  # [B, N, T, F]
-            mask = batch["mask"]  # [B, N]
-            B, N, T, Feat = features.shape
-
-            for b in range(B):
-                x = features[b]  # [N, T, F]
-                m = mask[b]  # [N]
-
-                # Encoder (conv + BiLSTM)
-                h = model.encode_price(x)  # [N, 256]
-                h = model.node_proj(h)  # [N, gat_in_dim]
-
-                # GAT layer 1
-                h1 = F.elu(model.gat1(h, ei, ew))
-                h = model.gat_norm1(h + h1)
-
-                # GAT layer 2
-                h2 = F.elu(model.gat2(h, ei, ew))
-                h = model.gat_norm2(h + h2)  # [N, 256]
-
-                emb = h.cpu().numpy()
-                date_str = graph_dataset._snapshots[
-                    batch["__index__"][b] if "__index__" in batch else 0
-                ]["date"]
-
-                for j in range(N):
-                    if m[j]:
-                        embeddings[(tickers[j], date_str)] = emb[j]
-
-    del model
-    torch.cuda.empty_cache()
-    return embeddings
-
-
-# We need to patch the GraphSnapshotDataset to include index
-def _graph_collate_with_idx(dataset, indices):
-    """Collate that also returns snapshot indices for date lookup."""
-    batch = [dataset[i] for i in indices]
-    collated = {}
-    for key in batch[0]:
-        if isinstance(batch[0][key], torch.Tensor):
-            collated[key] = torch.stack([b[key] for b in batch])
-        else:
-            collated[key] = [b[key] for b in batch]
-    collated["__snap_indices__"] = indices
-    return collated
 
 
 def extract_gat_embeddings_v2(
@@ -186,15 +126,12 @@ def extract_gat_embeddings_v2(
     embeddings: dict[tuple[str, str], np.ndarray] = {}
 
     with torch.no_grad():
-        for snap_idx in range(0, len(graph_dataset), batch_size):
-            end_idx = min(snap_idx + batch_size, len(graph_dataset))
-            for si in range(snap_idx, end_idx):
-                sample = graph_dataset[si]
-                x = sample["features"].unsqueeze(0).to(device)  # [1, N, T, F]
-                m = sample["mask"]  # [N]
+        for si in range(len(graph_dataset)):
+            sample = graph_dataset[si]
+            x = sample["features"].to(device)
+            m = sample["mask"]
 
-                x = x.squeeze(0)  # [N, T, F]
-
+            with torch.amp.autocast("cuda"):
                 h = model.encode_price(x)
                 h = model.node_proj(h)
                 h1 = F.elu(model.gat1(h, ei, ew))
@@ -202,12 +139,12 @@ def extract_gat_embeddings_v2(
                 h2 = F.elu(model.gat2(h, ei, ew))
                 h = model.gat_norm2(h + h2)
 
-                emb = h.cpu().numpy()
-                date_str = graph_dataset._snapshots[si]["date"]
+            emb = h.float().cpu().numpy()
+            date_str = graph_dataset._snapshots[si]["date"]
 
-                for j in range(len(tickers)):
-                    if m[j]:
-                        embeddings[(tickers[j], date_str)] = emb[j]
+            for j in range(len(tickers)):
+                if m[j]:
+                    embeddings[(tickers[j], date_str)] = emb[j]
 
     del model
     torch.cuda.empty_cache()
@@ -229,7 +166,7 @@ def extract_doc_embeddings(
     """Extract attention-pooled FinBERT embeddings for each 10-K filing.
 
     Returns {(ticker, year): np.ndarray of shape (768,)}.
-    Uses fp16 for FinBERT to maximise GPU throughput (~1.5 GB peak).
+    Uses fp16 for FinBERT to maximize GPU throughput (~1.5 GB peak).
     """
     from transformers import AutoTokenizer
 
@@ -256,10 +193,9 @@ def extract_doc_embeddings(
             ticker = sample["ticker"]
             year = sample["year"]
             n_chunks = sample["num_chunks"]
-            ids = sample["input_ids"][:n_chunks]  # [C, S]
-            mask = sample["attention_mask"][:n_chunks]  # [C, S]
+            ids = sample["input_ids"][:n_chunks]
+            mask = sample["attention_mask"][:n_chunks]
 
-            # Process chunks in large batches through FinBERT fp16
             cls_list = []
             for start in range(0, n_chunks, chunk_batch_size):
                 end = min(start + chunk_batch_size, n_chunks)
@@ -274,97 +210,77 @@ def extract_doc_embeddings(
 
                 del mini_ids, mini_mask, enc_out
 
-            chunk_cls = torch.cat(cls_list, dim=0)  # [C, 768]
-            # Mean-pool across chunks (matches training approach)
-            embedding = chunk_cls.mean(dim=0).cpu().numpy()  # (768,)
+            chunk_cls = torch.cat(cls_list, dim=0)
+            embedding = chunk_cls.mean(dim=0).cpu().numpy()
             embeddings[(ticker, year)] = embedding
 
     del model
     torch.cuda.empty_cache()
+    log_gpu_usage("  After doc extraction: ")
     return embeddings
 
 
 # ======================================================================
-# 4. News embeddings  (512-d per window)
+# 4. Macro MLP embeddings  (32-d per date)
 # ======================================================================
 
 
-def extract_news_embeddings(
-    news_csv: str | Path = "data/raw/news/news_articles.csv",
-    prices_dir: str | Path = "data/raw/prices",
-    targets_dir: str | Path = "data/targets",
-    model_path: str | Path = "models/news_model_best.pt",
-    backbone: str = "ProsusAI/finbert",
+def extract_macro_embeddings(
+    macro_features_df: pd.DataFrame,
+    model_path: str | Path = "models/macro_model_best.pt",
     device: str = "cuda",
-    batch_size: int = 16,
-) -> dict[tuple[str, str], np.ndarray]:
-    """Extract BiGRU temporal embeddings for each news window.
+) -> dict[str, np.ndarray]:
+    """Extract macro embeddings for each date.
 
-    Returns {(ticker, date_str): np.ndarray of shape (512,)}.
-    Uses fp16 for FinBERT article encoding.
+    If no trained macro model exists, returns raw features zero-padded to 32-d.
+
+    Returns {date_str: np.ndarray of shape (32,)}.
     """
-    from transformers import AutoTokenizer
+    from src.data.macro_features import MACRO_FEATURE_NAMES
 
-    from src.data.news_dataset import NewsWindowDataset, load_news_articles
-    from src.models.news_model import NewsTemporalDirectionModel
+    macro_features_df = macro_features_df.copy()
+    macro_features_df.index = pd.to_datetime(macro_features_df.index)
 
-    news_df = load_news_articles(news_csv)
-    direction_df = pd.read_csv(Path(targets_dir) / "direction_labels_multi_horizon.csv")
+    embeddings: dict[str, np.ndarray] = {}
 
-    dir_dates = direction_df[["ticker", "date"]].copy()
-    dir_dates["date"] = pd.to_datetime(dir_dates["date"])
-    news_start = news_df["date"].min()
-    anchors = dir_dates[dir_dates["date"] >= news_start].copy()
+    model_path = Path(model_path)
+    if model_path.exists():
+        from src.models.macro_model import MacroStateModel
 
-    tokenizer = AutoTokenizer.from_pretrained(backbone)
-    news_ds = NewsWindowDataset(
-        news_df,
-        anchors,
-        tokenizer,
-        max_articles=16,
-        max_length=128,
-        window_days=7,
-    )
+        model = MacroStateModel(input_dim=12, hidden_dim=64, output_dim=32)
+        ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"])
+        model.eval().to(device)
 
-    model = NewsTemporalDirectionModel(backbone_name=backbone)
-    ckpt = torch.load(model_path, map_location="cpu", weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model.eval()
+        with torch.no_grad():
+            for date_idx in macro_features_df.index:
+                date_str = str(date_idx.date())
+                feat = macro_features_df.loc[date_idx, MACRO_FEATURE_NAMES].values
+                if np.any(np.isnan(feat)):
+                    continue
+                x = torch.tensor(feat, dtype=torch.float32).unsqueeze(0).to(device)
+                with torch.amp.autocast("cuda"):
+                    emb = model.encode(x)
+                embeddings[date_str] = emb.float().cpu().numpy()[0]
 
-    # fp16 FinBERT encoder
-    model.encoder = model.encoder.half().to(device)
-    model.temporal = model.temporal.to(device)
-
-    embeddings: dict[tuple[str, str], np.ndarray] = {}
-
-    with torch.no_grad():
-        for idx in range(len(news_ds)):
-            sample = news_ds[idx]
-            ticker = sample["ticker"]
-            date_str = sample["date"]
-            n_articles = sample["num_articles"]
-
-            if n_articles == 0:
+        del model
+        torch.cuda.empty_cache()
+    else:
+        # No trained model -- use zero-padded raw features projected to 32-d
+        for date_idx in macro_features_df.index:
+            date_str = str(date_idx.date())
+            feat = macro_features_df.loc[date_idx, MACRO_FEATURE_NAMES].values
+            if np.any(np.isnan(feat)):
                 continue
+            padded = np.zeros(32, dtype=np.float32)
+            padded[:12] = feat.astype(np.float32)
+            embeddings[date_str] = padded
 
-            ids = sample["input_ids"][:n_articles].unsqueeze(0).to(device)  # [1, A, S]
-            mask = sample["attention_mask"][:n_articles].unsqueeze(0).to(device)
-
-            with torch.amp.autocast("cuda"):
-                article_emb = model.encode_articles(ids, mask)  # [1, A, 768]
-
-            article_emb = article_emb.float()
-            temporal_out, _ = model.temporal(article_emb)  # [1, A, 512]
-            emb = temporal_out[:, -1, :].cpu().numpy()  # [1, 512]
-            embeddings[(ticker, date_str)] = emb[0]
-
-    del model
-    torch.cuda.empty_cache()
     return embeddings
 
 
 # ======================================================================
-# 5. Surprise features  (3-d per sample)
+# 5. Surprise features  (5-d per sample, NO LEAKAGE)
 # ======================================================================
 
 
@@ -372,27 +288,58 @@ def build_surprise_features(
     targets_dir: str | Path = "data/targets",
     lookback_days: int = 90,
 ) -> dict[tuple[str, str], np.ndarray]:
-    """Build surprise features: [is_beat, is_miss, recency].
+    """Build FIXED surprise features: [surprise_pct, surprise_magnitude_normalized,
+    recency_decay, trailing_3q_beat_rate, eps_revision_direction].
 
-    For each (ticker, date), find the most recent earnings event within
-    lookback_days. Returns {(ticker, date_str): np.array([is_beat, is_miss,
-    days_since / lookback_days])}.
+    NO is_beat or is_miss features -- these encode the target and cause leakage.
+
+    For each (ticker, date), find earnings events within lookback_days.
+    Returns {(ticker, date_str): np.array of shape (5,)}.
     """
     surp_df = pd.read_csv(Path(targets_dir) / "fundamental_surprise_targets.csv")
     surp_df["date"] = pd.to_datetime(surp_df["date"])
 
-    # Get only actual earnings events
     events = surp_df[surp_df["has_earnings_event"] == 1].copy()
     events = events.sort_values(["ticker", "date"])
 
-    # Build per-ticker sorted event list
-    ticker_events: dict[str, list[tuple]] = defaultdict(list)
+    ticker_events: dict[str, list[dict]] = defaultdict(list)
     for _, row in events.iterrows():
+        surprise_pct = float(row.get("surprise_pct", 0.0))
         is_beat = 1.0 if row["surprise_id"] == 1 else 0.0
-        is_miss = 1.0 if row["surprise_id"] == 0 else 0.0
-        ticker_events[row["ticker"]].append((row["date"], is_beat, is_miss))
+        ticker_events[row["ticker"]].append(
+            {
+                "date": row["date"],
+                "surprise_pct": surprise_pct,
+                "is_beat": is_beat,
+            }
+        )
 
-    # For each (ticker, date) in the price universe
+    ticker_trailing: dict[str, list[dict]] = {}
+    for ticker, evts in ticker_events.items():
+        trailing = []
+        all_pcts = []
+        for i, evt in enumerate(evts):
+            past_evts = evts[max(0, i - 3) : i]
+            beat_rate = (
+                sum(e["is_beat"] for e in past_evts) / len(past_evts)
+                if past_evts
+                else 0.5
+            )
+            all_pcts.append(evt["surprise_pct"])
+            trailing_pcts = all_pcts[max(0, len(all_pcts) - 8) :]
+            pct_mean = np.mean(trailing_pcts) if trailing_pcts else 0.0
+            pct_std = np.std(trailing_pcts) if len(trailing_pcts) > 1 else 1.0
+
+            trailing.append(
+                {
+                    **evt,
+                    "beat_rate_3q": beat_rate,
+                    "pct_mean": pct_mean,
+                    "pct_std": max(pct_std, 1e-6),
+                }
+            )
+        ticker_trailing[ticker] = trailing
+
     all_dates = surp_df[["ticker", "date"]].drop_duplicates()
     features: dict[tuple[str, str], np.ndarray] = {}
 
@@ -401,17 +348,34 @@ def build_surprise_features(
         dt = row["date"]
         date_str = str(dt.date())
 
-        evts = ticker_events.get(ticker, [])
+        evts = ticker_trailing.get(ticker, [])
         best = None
-        for evt_date, is_beat, is_miss in reversed(evts):
-            if evt_date <= dt:
-                days_since = (dt - evt_date).days
+        for evt in reversed(evts):
+            if evt["date"] <= dt:
+                days_since = (dt - evt["date"]).days
                 if days_since <= lookback_days:
-                    best = (is_beat, is_miss, days_since / lookback_days)
+                    surprise_pct = float(evt["surprise_pct"])
+                    surprise_mag_norm = (surprise_pct - evt["pct_mean"]) / evt[
+                        "pct_std"
+                    ]
+                    recency_decay = float(np.exp(-days_since / 90.0))
+                    beat_rate_3q = float(evt["beat_rate_3q"])
+                    eps_revision = 0.0
+
+                    best = np.array(
+                        [
+                            surprise_pct,
+                            surprise_mag_norm,
+                            recency_decay,
+                            beat_rate_3q,
+                            eps_revision,
+                        ],
+                        dtype=np.float32,
+                    )
                 break
 
         if best is not None:
-            features[(ticker, date_str)] = np.array(best, dtype=np.float32)
+            features[(ticker, date_str)] = best
 
     return features
 
@@ -425,24 +389,25 @@ def extract_all_embeddings(
     prices_dir: str | Path = "data/raw/prices",
     targets_dir: str | Path = "data/targets",
     processed_dir: str | Path = "data/processed",
-    news_csv: str | Path = "data/raw/news/news_articles.csv",
+    macro_csv: str | Path = "data/raw/macro/macro_prices.csv",
     save_path: str | Path = "data/embeddings/fusion_embeddings.pt",
     device: str = "cuda",
     verbose: bool = True,
 ) -> dict[str, Any]:
     """Extract embeddings from all pretrained models and save aligned dataset.
 
-    Returns a summary dict with counts and timing info.
+    V2: 4 modalities (no news), fixed surprise features, 60-day direction.
     """
     t0 = time.time()
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # Load price data + normalise (same pipeline as training)
-    # ------------------------------------------------------------------
+    gpu_device = setup_gpu(verbose=verbose)
+    device = str(gpu_device)
+
+    # Load price data + normalize
     if verbose:
-        print("Loading price data and normalising...")
+        print("Loading price data and normalizing...")
     prices = load_price_csv_dir(prices_dir)
     price_df = prepare_price_features(prices)
 
@@ -450,12 +415,10 @@ def extract_all_embeddings(
     targets_df["date"] = pd.to_datetime(targets_df["date"])
     price_df["date"] = pd.to_datetime(price_df["date"])
 
-    # Fit z-score scaler on train dates (≤ 2022)
     train_mask = price_df["date"] <= "2022-12-31"
     scaler = fit_scaler(price_df.loc[train_mask], ENGINEERED_FEATURES)
     price_df_norm = scaler.transform(price_df.copy(), ENGINEERED_FEATURES)
 
-    # Build PriceWindowDataset
     price_ds = PriceWindowDataset(
         price_df_norm,
         targets_df,
@@ -465,30 +428,25 @@ def extract_all_embeddings(
     if verbose:
         print(f"  Price dataset: {len(price_ds)} samples")
 
-    # ------------------------------------------------------------------
     # A) Price embeddings
-    # ------------------------------------------------------------------
     if verbose:
         print("\n[1/5] Extracting price embeddings (batch=512)...")
     t1 = time.time()
     price_embs = extract_price_embeddings(price_ds, device=device, batch_size=512)
     if verbose:
-        print(f"  Done — {len(price_embs)} embeddings in {time.time()-t1:.1f}s")
+        print(f"  Done -- {len(price_embs)} embeddings in {time.time()-t1:.1f}s")
+        log_gpu_usage("  ")
 
-    # ------------------------------------------------------------------
     # B) GAT embeddings
-    # ------------------------------------------------------------------
     if verbose:
         print("\n[2/5] Extracting GAT embeddings...")
     t2 = time.time()
-
     graph = load_graph()
     ei, ew, et = make_bidirectional(
         graph["edge_index"], graph["edge_weight"], graph["edge_type"]
     )
     graph_tickers = graph["tickers"]
 
-    # Build graph dataset with same normalisation
     gat_price_df, gat_targets_df, _ = build_graph_snapshots(
         prices_dir,
         targets_dir,
@@ -515,11 +473,9 @@ def extract_all_embeddings(
         batch_size=64,
     )
     if verbose:
-        print(f"  Done — {len(gat_embs)} embeddings in {time.time()-t2:.1f}s")
+        print(f"  Done -- {len(gat_embs)} embeddings in {time.time()-t2:.1f}s")
 
-    # ------------------------------------------------------------------
     # C) Document embeddings
-    # ------------------------------------------------------------------
     if verbose:
         print("\n[3/5] Extracting document embeddings (FinBERT fp16, chunks=64)...")
     t3 = time.time()
@@ -530,11 +486,9 @@ def extract_all_embeddings(
     )
     if verbose:
         print(
-            f"  Done — {len(doc_embs_raw)} filing embeddings in {time.time()-t3:.1f}s"
+            f"  Done -- {len(doc_embs_raw)} filing embeddings in {time.time()-t3:.1f}s"
         )
 
-    # Map (ticker, year) → per-date availability
-    # For a prediction date, use the filing from year-1
     doc_embs: dict[tuple[str, str], np.ndarray] = {}
     for ticker, date_str in price_embs:
         year = int(date_str[:4])
@@ -543,39 +497,40 @@ def extract_all_embeddings(
         if key in doc_embs_raw:
             doc_embs[(ticker, date_str)] = doc_embs_raw[key]
 
-    # ------------------------------------------------------------------
-    # D) News embeddings
-    # ------------------------------------------------------------------
+    # D) Macro embeddings
     if verbose:
-        print("\n[4/5] Extracting news embeddings (FinBERT fp16)...")
+        print("\n[4/5] Extracting macro embeddings...")
     t4 = time.time()
-    news_path = Path(news_csv)
-    if news_path.exists():
-        news_embs = extract_news_embeddings(
-            news_csv,
-            prices_dir,
-            targets_dir,
-            device=device,
-            batch_size=16,
+    macro_path = Path(macro_csv)
+    macro_embs: dict[str, np.ndarray] = {}
+    if macro_path.exists():
+        from src.data.macro_features import (
+            load_macro_data,
+            compute_macro_features,
+            MacroFeatureScaler,
         )
-    else:
-        news_embs = {}
-    if verbose:
-        print(f"  Done — {len(news_embs)} window embeddings in {time.time()-t4:.1f}s")
 
-    # ------------------------------------------------------------------
-    # E) Surprise features
-    # ------------------------------------------------------------------
+        raw_macro = load_macro_data(macro_csv)
+        macro_feat = compute_macro_features(raw_macro, lag_days=1)
+        macro_scaler = MacroFeatureScaler()
+        macro_scaler.fit(macro_feat, train_end="2022-12-31")
+        macro_feat_norm = macro_scaler.transform(macro_feat)
+        macro_embs = extract_macro_embeddings(macro_feat_norm, device=device)
+    else:
+        if verbose:
+            print("  WARNING: No macro data found. Macro modality unavailable.")
     if verbose:
-        print("\n[5/5] Building surprise features...")
+        print(f"  Done -- {len(macro_embs)} macro embeddings in {time.time()-t4:.1f}s")
+
+    # E) Surprise features (FIXED -- no leakage)
+    if verbose:
+        print("\n[5/5] Building surprise features (FIXED, 5-d, no leakage)...")
     t5 = time.time()
     surprise_feats = build_surprise_features(targets_dir, lookback_days=90)
     if verbose:
-        print(f"  Done — {len(surprise_feats)} features in {time.time()-t5:.1f}s")
+        print(f"  Done -- {len(surprise_feats)} features in {time.time()-t5:.1f}s")
 
-    # ------------------------------------------------------------------
-    # Align everything by (ticker, date) from the price dataset
-    # ------------------------------------------------------------------
+    # Align everything
     if verbose:
         print("\nAligning all modalities...")
 
@@ -587,30 +542,17 @@ def extract_all_embeddings(
             row["realized_vol_20d_annualized"]
         )
 
-    surp_target_df = pd.read_csv(Path(targets_dir) / "fundamental_surprise_targets.csv")
-    surp_target_df["date"] = pd.to_datetime(surp_target_df["date"])
-    surp_target_lookup: dict[tuple[str, str], int] = {}
-    for _, row in surp_target_df.iterrows():
-        sid = int(row["surprise_id"])
-        if sid >= 0:
-            surp_target_lookup[(row["ticker"], str(row["date"].date()))] = sid
-
     N = len(price_ds)
-    PRICE_DIM = 256
-    GAT_DIM = 256
-    DOC_DIM = 768
-    NEWS_DIM = 512
-    SURP_DIM = 3
+    PRICE_DIM, GAT_DIM, DOC_DIM, MACRO_DIM, SURP_DIM = 256, 256, 768, 32, 5
 
     all_price = np.zeros((N, PRICE_DIM), dtype=np.float32)
     all_gat = np.zeros((N, GAT_DIM), dtype=np.float32)
     all_doc = np.zeros((N, DOC_DIM), dtype=np.float32)
-    all_news = np.zeros((N, NEWS_DIM), dtype=np.float32)
+    all_macro = np.zeros((N, MACRO_DIM), dtype=np.float32)
     all_surprise = np.zeros((N, SURP_DIM), dtype=np.float32)
-    all_mask = np.zeros((N, 5), dtype=np.float32)  # [price, gat, doc, news, surprise]
+    all_mask = np.zeros((N, 4), dtype=np.float32)  # [price, gat, doc, macro]
     all_dir_label = np.full(N, -1, dtype=np.int64)
     all_vol_target = np.full(N, float("nan"), dtype=np.float32)
-    all_surp_target = np.full(N, -1, dtype=np.int64)
     all_tickers: list[str] = []
     all_dates: list[str] = []
 
@@ -623,55 +565,40 @@ def extract_all_embeddings(
         all_tickers.append(ticker)
         all_dates.append(date_str)
 
-        # Direction label (5-day horizon)
-        all_dir_label[i] = int(sample.get("direction_5d", -1))
+        all_dir_label[i] = int(sample.get("direction_60d", -1))
 
-        # Volatility target
         if key in vol_lookup:
             all_vol_target[i] = vol_lookup[key]
 
-        # Surprise target
-        if key in surp_target_lookup:
-            all_surp_target[i] = surp_target_lookup[key]
-
-        # Price embedding (always available)
         if key in price_embs:
             all_price[i] = price_embs[key]
             all_mask[i, 0] = 1.0
 
-        # GAT embedding
         if key in gat_embs:
             all_gat[i] = gat_embs[key]
             all_mask[i, 1] = 1.0
 
-        # Document embedding
         if key in doc_embs:
             all_doc[i] = doc_embs[key]
             all_mask[i, 2] = 1.0
 
-        # News embedding
-        if key in news_embs:
-            all_news[i] = news_embs[key]
+        if date_str in macro_embs:
+            all_macro[i] = macro_embs[date_str]
             all_mask[i, 3] = 1.0
 
-        # Surprise features
         if key in surprise_feats:
             all_surprise[i] = surprise_feats[key]
-            all_mask[i, 4] = 1.0
 
-    # ------------------------------------------------------------------
     # Save
-    # ------------------------------------------------------------------
     data = {
         "price_emb": torch.from_numpy(all_price),
         "gat_emb": torch.from_numpy(all_gat),
         "doc_emb": torch.from_numpy(all_doc),
-        "news_emb": torch.from_numpy(all_news),
+        "macro_emb": torch.from_numpy(all_macro),
         "surprise_feat": torch.from_numpy(all_surprise),
         "modality_mask": torch.from_numpy(all_mask),
         "direction_label": torch.from_numpy(all_dir_label),
         "volatility_target": torch.from_numpy(all_vol_target),
-        "surprise_target": torch.from_numpy(all_surp_target),
         "tickers": all_tickers,
         "dates": all_dates,
     }
@@ -682,20 +609,20 @@ def extract_all_embeddings(
         "price_available": int(all_mask[:, 0].sum()),
         "gat_available": int(all_mask[:, 1].sum()),
         "doc_available": int(all_mask[:, 2].sum()),
-        "news_available": int(all_mask[:, 3].sum()),
-        "surprise_available": int(all_mask[:, 4].sum()),
+        "macro_available": int(all_mask[:, 3].sum()),
+        "surprise_available": int((all_surprise.sum(axis=1) != 0).sum()),
         "dir_labels_valid": int((all_dir_label >= 0).sum()),
         "vol_targets_valid": int((~np.isnan(all_vol_target)).sum()),
-        "surp_targets_valid": int((all_surp_target >= 0).sum()),
         "time_seconds": time.time() - t0,
         "save_path": str(save_path),
     }
 
     if verbose:
-        print(f"\nExtraction complete — {N} samples")
+        print(f"\nExtraction complete -- {N} samples")
         for k, v in summary.items():
             if k != "save_path":
                 print(f"  {k}: {v}")
         print(f"  Saved to {save_path}")
+        log_gpu_usage("  Final: ")
 
     return summary

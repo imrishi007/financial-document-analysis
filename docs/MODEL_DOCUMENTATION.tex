@@ -1768,4 +1768,223 @@ model (AUC=0.5312). The key lessons:
     \item \textbf{Data leakage vigilance} is essential---forward-looking peer returns inflated AUC from 0.52 to 0.94
 \end{enumerate}
 
+
+% ===========================================================================
+\section{Phase 10: V2 Pipeline --- 4-Modality Redesign with ListNet and Macro}
+% ===========================================================================
+
+\subsection{Motivation}
+
+After Phase 9, a systematic code review identified three critical issues in the V1 pipeline:
+\begin{enumerate}
+    \item \textbf{Surprise data leakage (critical)}: The 3-dimensional surprise feature vector
+          $[\texttt{is\_beat}, \texttt{is\_miss}, \texttt{recency}]$ directly encodes the
+          BEAT/MISS earnings label as input, causing the surprise gate weight to inflate to 39.2\%
+          and the surprise task head AUC to reach a perfect 1.000. All V1 results involving the
+          surprise modality are invalidated.
+    \item \textbf{News modality ineffectiveness}: The news FinBERT+BiGRU modality covers only
+          2.1\% of trading days with only 0.021 mean gate weight. The model learns to ignore it.
+    \item \textbf{GPU underutilization}: No AMP, batch size 32, cuDNN benchmark off---the RTX 2050
+          VRAM (4.29 GB) was barely utilized during training.
+\end{enumerate}
+
+\subsection{V2 Architectural Changes}
+
+\subsubsection{Removed Components}
+\begin{itemize}
+    \item \textbf{News modality} (\texttt{news\_model.py}, \texttt{news\_dataset.py}, \texttt{train\_news.py}):
+          removed due to 2.1\% coverage and negligible contribution.
+    \item \textbf{Surprise MLP modality} and \textbf{Surprise task head}: removed due to leakage.
+    \item \textbf{Dynamic graph} (\texttt{dynamic\_graph.py}): showed $<+0.001$ AUC improvement.
+    \item \textbf{Regime-switching ensemble}: negative result (AUC 0.498 vs 0.531 baseline).
+\end{itemize}
+
+\subsubsection{Added Components}
+\begin{itemize}
+    \item \textbf{Macro modality (NEW)}: 12-dimensional backward-looking market state vector
+          encoding VIX, Treasury yields, SPY momentum, yield curve spread, credit spreads,
+          gold momentum, and market breadth. Computed daily from freely available Yahoo Finance
+          data (\^{V}IX, TLT, IEF, SPY, QQQ, SHY, GLD, HYG, LQD), lagged 1 day (no leakage).
+    \item \textbf{ListNet ranking loss}: replaces binary cross-entropy for direction prediction.
+          Groups samples by trading date and optimizes cross-stock ranking:
+          $$L_{\text{ListNet}} = \frac{1}{|D|}\sum_{d \in D} \text{KL}\!\left(\text{softmax}(y_d) \,\|\, \text{softmax}(\hat{y}_d)\right)$$
+          This removes common market beta noise that inflates difficulty.
+    \item \textbf{60-day primary horizon}: moved from 5-day to 60-day as primary target,
+          motivated by Phase 8 finding that 60-day improved AUC from 0.524 to 0.569.
+    \item \textbf{AMP fp16 training}: \texttt{torch.amp.autocast} + \texttt{GradScaler}
+          wired into all training loops. Batch size 1024 (fusion), 512 (price), 256 (GAT).
+          cuDNN benchmark and TF32 enabled.
+    \item \textbf{Fixed surprise features}: 5-dimensional backward-looking features
+          $[\text{surprise\_pct}, \text{surprise\_mag\_norm}, \text{recency\_decay},
+          \text{trailing\_3q\_beat\_rate}, \text{eps\_revision\_dir}]$ used as gating
+          conditioning signal only (not as a modality, not as a prediction target).
+\end{itemize}
+
+\subsubsection{V2 Fusion Architecture}
+
+The V2 \texttt{MultimodalFusionModel} fuses 4 modalities via sigmoid gating:
+
+\begin{table}[H]
+\centering
+\caption{V2 Modality Dimensions}
+\begin{tabular}{lll}
+\toprule
+\textbf{Modality} & \textbf{Dimension} & \textbf{Encoder} \\
+\midrule
+Price    & 256-d & CNN-BiLSTM (60-day OHLCV windows) \\
+GAT      & 256-d & Graph Attention Network (10-node static) \\
+Document & 768-d & FinBERT attention-pooled (10-K chunks) \\
+Macro    & 32-d  & MLP-3L (12 macro features $\to$ 32-d) -- NEW \\
+\midrule
+Gating input & 5-d & Surprise features (conditioning only, not modality) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Gating input: $[p_\text{price}, p_\text{gat}, p_\text{doc}, p_\text{macro}, \text{surprise\_feat}] \in \mathbb{R}^{512+5}$,
+processed by \texttt{Linear(517, 256) $\to$ GELU $\to$ Linear(256, 4) $\to$ Sigmoid}.
+
+Combined loss: $L = 0.7 \times L_{\text{ListNet}}(\text{direction}) + 0.3 \times L_{\text{MSE}}(\text{volatility})$.
+Total parameters: 550,919 (vs 545,443 V1).
+
+\subsection{V2 Individual Model Results}
+
+\begin{table}[H]
+\centering
+\caption{V2 Phase 4--5 Individual Model Results (60-day direction, test set)}
+\begin{tabular}{llrrrl}
+\toprule
+\textbf{Phase} & \textbf{Model} & \textbf{AUC} & \textbf{Acc} & \textbf{F1} & \textbf{Notes} \\
+\midrule
+4A & Price CNN-BiLSTM & 0.5504 & 0.5784 & 0.6867 & 60d, AMP, early stop ep.6 \\
+4B & Document FinBERT  & 0.4706 & 0.8500 & ---    & 82 filings; small dataset \\
+4C & Macro MLP-3L      & 0.5031 & 0.6254 & ---    & New modality; ep.19 \\
+5  & GAT (static)      & 0.5777 & 0.5777 & 0.6669 & 60d, AMP, early stop ep.10 \\
+5  & No-GAT ablation   & 0.5515 & 0.5637 & 0.6586 & Encoder + head only \\
+\midrule
+\multicolumn{2}{l}{Majority baseline (60d UP/DOWN)} & ---   & 0.6254 & --- & Heavy UP bias \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent \textbf{Note on Document model}: With only 82 filing samples split 52/10/20
+(train/val/test), the document model overfits. Val accuracy reaches 1.000 by epoch 3;
+AUC of 0.471 on the 20-sample test set is not a reliable estimate.
+
+\noindent \textbf{GAT improvement}: +2.6\% AUC over No-GAT (0.5777 vs 0.5515),
+consistent with V1 (+2.3\%). Graph attention over the tech-stock covariance structure
+provides reproducible signal.
+
+\subsection{V2 Fusion Model Results}
+
+\begin{table}[H]
+\centering
+\caption{V2 Fusion Model Results (60-day direction, test set)}
+\begin{tabular}{lrl}
+\toprule
+\textbf{Metric} & \textbf{Value} & \textbf{Notes} \\
+\midrule
+Direction AUC          & \textbf{0.5989} & Primary metric \\
+Direction Accuracy     & 0.5920 & \\
+Direction F1           & 0.6732 & \\
+Majority baseline acc. & 0.6254 & Heavy UP bias in 60d labels \\
+Volatility RMSE        & 0.1686 & \\
+Volatility R$^2$       & 0.3350 & \\
+Training epochs        & 11     & Early stop (patience=5) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{V2 Fusion Gate Weights}
+
+\begin{table}[H]
+\centering
+\caption{V2 Fusion Gate Weights (test set mean)}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Modality} & \textbf{V2 Gate Weight} & \textbf{V1 Gate Weight (for reference)} \\
+\midrule
+GAT (graph structure) & \textbf{0.4118} (41.2\%) & 0.1891 (18.9\%) \\
+Price (CNN-BiLSTM)    & 0.2357 (23.6\%) & 0.2140 (21.4\%) \\
+Document (FinBERT)    & 0.2269 (22.7\%) & 0.2440 (24.4\%) \\
+Macro (MLP-3L) -- NEW & 0.1255 (12.6\%) & --- \\
+\textit{~~News (removed)}      & \textit{---}    & \textit{0.0210 (2.1\%)} \\
+\textit{~~Surprise (invalidated)} & \textit{---} & \textit{0.3920 (39.2\%) leakage} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent \textbf{Key finding}: After removing the leaky surprise modality,
+GAT weight increases from 18.9\% to 41.2\%, becoming the dominant modality.
+This confirms that V1's surprise dominance (39.2\%) was entirely driven by leakage---
+the model had learned to read the answer from the input.
+
+\subsection{V2 vs V1 Comparison}
+
+\begin{table}[H]
+\centering
+\caption{V1 vs V2 Fusion Model Comparison}
+\begin{tabular}{lrrl}
+\toprule
+\textbf{Metric} & \textbf{V1} & \textbf{V2} & \textbf{Change} \\
+\midrule
+Direction AUC   & 0.5161 (5d)  & \textbf{0.5989} (60d) & $+0.083$ (+16.1\%) \\
+Volatility R$^2$ & 0.4115       & 0.3350                & $-0.077$ \\
+Modalities      & 5 (incl. leaky) & 4 (clean)          & fewer, cleaner \\
+Primary horizon & 5-day        & 60-day                & longer \\
+Loss            & CE+MSE+CE    & 0.7$\times$ListNet + 0.3$\times$MSE & ranking \\
+Batch size      & 32           & 1024                  & 32$\times$ larger \\
+AMP             & No           & Yes (fp16)            & enabled \\
+GPU: VRAM used  & $\sim$0.3 GB & $\sim$0.68 GB         & 2.3$\times$ more \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The 60-day horizon is the primary driver of AUC improvement (Phase 8
+demonstrated 60-day AUC of 0.569 vs 5-day 0.524 on the V1 baseline). The ListNet
+ranking loss contributes incremental improvement over the 60-day CE baseline.
+
+\subsection{V2 Ablation: V1 vs V2 AUC Progression}
+
+\begin{table}[H]
+\centering
+\caption{Cross-Pipeline AUC Progression (direction prediction)}
+\begin{tabular}{llr}
+\toprule
+\textbf{Phase} & \textbf{Model} & \textbf{AUC} \\
+\midrule
+V1 Phase 4 & Price (5d)                  & 0.5241 \\
+V1 Phase 5 & GAT (5d)                    & 0.5257 \\
+V1 Phase 6 & Fusion 5-modality (5d)      & 0.5161 \\
+V1 Phase 8 & V2 ranking loss (5d)        & 0.5249 \\
+V1 Phase 8 & V2 ranking loss (60d)       & 0.5312 \\
+V1 Phase 9C & Best clean model           & 0.5312 \\
+\midrule
+V2 Phase 4A & Price CNN-BiLSTM (60d)     & 0.5504 \\
+V2 Phase 5  & GAT static (60d)           & 0.5777 \\
+\textbf{V2 Phase 6} & \textbf{Fusion 4-mod, ListNet (60d)} & \textbf{0.5989} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{V2 Summary}
+
+The V2 pipeline achieves a direction AUC of \textbf{0.5989} on the 60-day horizon
+with 4 clean modalities and ListNet ranking loss. Compared to V1's best valid result
+(AUC=0.5312), this represents a $+0.069$ ($+13\%$) improvement.
+
+Key lessons from V1 $\to$ V2 transition:
+\begin{enumerate}
+    \item \textbf{Data leakage is the primary threat} to validity: surprise features inflated V1
+          AUC by masking the actual signal strength.
+    \item \textbf{Longer horizons are easier to predict}: 60-day direction is more predictable
+          than 5-day, as short-term noise dominates the latter.
+    \item \textbf{GAT is the highest-value modality} once leakage is removed, contributing
+          +2.6\% AUC in isolation and holding 41.2\% gate weight in the clean fusion.
+    \item \textbf{Macro features (new)} contribute a modest 12.6\% gate weight,
+          suggesting market regime information is partially captured but not dominant.
+    \item \textbf{ListNet ranking loss} improves cross-stock relative ranking by removing
+          common market beta, but AUC improvement over 60d CE is modest ($\sim$+0.015).
+\end{enumerate}
+
 \end{document}

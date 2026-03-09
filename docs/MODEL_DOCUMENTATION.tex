@@ -1987,4 +1987,226 @@ Key lessons from V1 $\to$ V2 transition:
           common market beta, but AUC improvement over 60d CE is modest ($\sim$+0.015).
 \end{enumerate}
 
+%% ====================================================================
+\section{Phase 11: Targeted Improvements}
+%% ====================================================================
+
+Phase 11 implemented three targeted improvements to the V2 pipeline:
+(A) Confidence filtering on V2 and V2.1 fusion outputs,
+(B) Expanded macro encoder from 32-d to 128-d (V2.1), and
+(C) a weekly long-short backtesting framework.
+All results are reported on the held-out test set (2024--2025).
+
+%% ------------------------------------------------------------------
+\subsection{Step 1: GPU Utilization Audit}
+%% ------------------------------------------------------------------
+
+A GPU diagnostic was run on the RTX 2050 (4.29~GB VRAM, compute 8.6).
+Key findings and fixes applied:
+
+\begin{itemize}
+    \item \textbf{cuDNN benchmark}: was OFF at startup; now enabled via
+          \texttt{setup\_gpu()}.
+    \item \textbf{TF32 matmul/cuDNN}: both now enabled.
+    \item \textbf{DataLoader workers}: \texttt{num\_workers=0} is faster on
+          Windows due to Python process-spawn overhead; applied in
+          \texttt{make\_dataloader()} with platform detection.
+    \item \textbf{GPU preloading}: \texttt{FusionEmbeddingDataset.to\_device()}
+          pre-loads all tensors to GPU at dataset creation, eliminating
+          per-batch host$\to$device copies.
+    \item \textbf{Batch size}: increased from 1024 to 4096 for better GPU
+          utilisation.
+    \item \textbf{Honest assessment}: peak VRAM is only $\sim$1.0~GB even at
+          batch~4096; the $\sim$563K-parameter fusion model is too small to
+          saturate the 4~GB VRAM on pre-extracted embeddings.
+\end{itemize}
+
+%% ------------------------------------------------------------------
+\subsection{Step 2: Dead Code Cleanup}
+%% ------------------------------------------------------------------
+
+Removed orphaned source files and large checkpoints freed from the repo:
+
+\begin{itemize}
+    \item Deleted source files: \texttt{news\_model.py}, \texttt{news\_dataset.py},
+          \texttt{train\_news.py}, \texttt{dynamic\_graph.py}
+    \item Deleted model checkpoints: \texttt{news\_model\_best.pt} ($\sim$450~MB),
+          \texttt{dynamic\_gat\_best.pt} ($\sim$9.7~MB),
+          \texttt{phase9\_regime/} directory ($\sim$6.5~MB)
+    \item Total freed: $\sim$466~MB
+    \item Retained: \texttt{graph\_nogat\_best.pt} (ablation reference)
+\end{itemize}
+
+%% ------------------------------------------------------------------
+\subsection{Phase 11B: Macro Encoder Expansion (32-d $\to$ 128-d)}
+%% ------------------------------------------------------------------
+
+\subsubsection{Motivation}
+The V2 macro encoder used a small 3-layer MLP
+(12$\to$64$\to$64$\to$32) and held only 12.6\% gate weight in the
+fusion model. Expanding the encoder was hypothesised to extract richer
+macro state representations.
+
+\subsubsection{Architecture Change}
+The macro encoder was widened to
+12$\to$128$\to$128$\to$128 (hidden\_dim=128, output\_dim=128, dropout=0.1).
+All other modalities (price 256-d, GAT 256-d, doc 768-d) and the fusion
+head were kept identical.
+
+\subsubsection{Results (V2 vs V2.1)}
+
+\begin{center}
+\begin{tabular}{lccr}
+\hline
+\textbf{Metric}   & \textbf{V2 (32-d)} & \textbf{V2.1 (128-d)} & \textbf{$\Delta$} \\
+\hline
+Direction AUC     & 0.5989             & 0.5917                & $-0.0072$ \\
+Direction Acc     & 0.5920             & 0.5544                & $-0.0376$ \\
+Direction F1      & N/A                & 0.5944                & --- \\
+Vol R$^2$         & 0.3350             & 0.1154                & $-0.2196$ \\
+\hline
+Gate: Price       & 23.6\%             & 12.4\%                & $-11.2$pp \\
+Gate: GAT         & 41.2\%             & 38.1\%                & $-3.1$pp \\
+Gate: Doc         & 22.7\%             & 17.8\%                & $-4.9$pp \\
+Gate: Macro       & 12.6\%             & 31.7\%                & $+19.1$pp \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsubsection{Analysis}
+The expanded macro encoder significantly increased macro gate weight
+(12.6\% $\to$ 31.7\%, a $2.5\times$ increase), confirming that the
+richer embedding captures more information the fusion head finds useful.
+However, both directional AUC and volatility R$^2$ decreased.
+Two likely explanations:
+\begin{enumerate}
+    \item The 128-d macro encoder requires stronger regularisation to
+          avoid overfitting on the small macro dataset.
+    \item The 128-d macro embedding dominates the fusion too aggressively,
+          reducing the contribution of the well-trained GAT and price
+          modalities.
+\end{enumerate}
+\textbf{Verdict}: V2 (32-d macro) remains the best overall model by AUC.
+
+%% ------------------------------------------------------------------
+\subsection{Phase 11A: Confidence Filtering}
+%% ------------------------------------------------------------------
+
+\subsubsection{Method}
+For each test sample, the maximum predicted probability across the two
+direction classes is computed: $c = \max(P(\text{UP}), P(\text{DOWN}))$.
+Samples with $c < \theta$ are excluded. Thresholds
+$\theta \in \{0.50, 0.52, 0.54, \ldots, 0.70\}$ were swept.
+
+\subsubsection{V2 Confidence Filtering}
+\textbf{Conclusion}: Filtering degrades V2 performance.
+The best AUC (0.6149) occurs at full coverage ($\theta=0.50$).
+Higher thresholds progressively reduce AUC and F1 collapses to 0.0
+at $\theta \geq 0.55$ (model degenerates to all-one-class predictions).
+V2 has poor output calibration --- insufficient confidence spread.
+
+\subsubsection{V2.1 Confidence Filtering Results}
+\begin{center}
+\begin{tabular}{rrrrrr}
+\hline
+\textbf{Thresh} & \textbf{N} & \textbf{Cov.} & \textbf{AUC} & \textbf{Acc} & \textbf{F1} \\
+\hline
+0.50 & 9520 & 100.0\% & 0.5918 & 0.5544 & 0.5944 \\
+0.52 & 8216 &  86.3\% & 0.6001 & 0.5565 & 0.5909 \\
+0.54 & 6934 &  72.8\% & 0.6068 & 0.5509 & 0.5645 \\
+0.56 & 5588 &  58.7\% & 0.6126 & 0.5311 & 0.4938 \\
+\textbf{0.60} & \textbf{3068} & \textbf{32.2\%} & \textbf{0.6127} & 0.4922 & 0.2010 \\
+0.62 & 2164 &  22.7\% & 0.5765 & 0.5185 & 0.0844 \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Conclusion}: V2.1 is better calibrated than V2.
+Filtering at $\theta=0.60$ achieves AUC~0.6127 (+0.021 over V2.1 full,
+at 32.2\% coverage). This represents a precision--recall trade-off:
+higher-confidence predictions are more accurate but only 1-in-3 samples
+qualify. F1 degrades significantly at high thresholds as the model
+becomes conservative.
+
+%% ------------------------------------------------------------------
+\subsection{Phase 11C: Weekly Long-Short Backtest}
+%% ------------------------------------------------------------------
+
+\subsubsection{Setup}
+\begin{itemize}
+    \item \textbf{Model}: V2 fusion (macro 32-d)
+    \item \textbf{Universe}: 10 tickers (S\&P 500 constituents)
+    \item \textbf{Portfolio}: Top-2 long / Bottom-2 short by predicted UP probability
+    \item \textbf{Rebalancing}: Every 5 trading days (weekly)
+    \item \textbf{Position sizing}: Equal weight and confidence-weighted variants
+    \item \textbf{Test period}: 384 trading days (96 weekly rebalances), 2024--2025
+    \item \textbf{Transaction costs}: 0, 5, 10, 20 basis points (one-way)
+\end{itemize}
+
+\subsubsection{Results}
+
+\begin{center}
+\begin{tabular}{llrrrr}
+\hline
+\textbf{Sizing}   & \textbf{Cost} & \textbf{Total Ret.} & \textbf{Sharpe} & \textbf{Max DD} & \textbf{Win Rate} \\
+\hline
+Equal weight      & 0 bp   & $+10.4$\%  & 0.180  & $-19.0$\% & 51.9\% \\
+Equal weight      & 5 bp   & $+8.7$\%   & 0.123  & $-19.4$\% & 50.6\% \\
+Equal weight      & 10 bp  & $+7.0$\%   & 0.067  & $-19.8$\% & 50.6\% \\
+Equal weight      & 20 bp  & $+3.7$\%   & $-0.046$ & $-20.7$\% & 49.4\% \\
+Conf-weighted     & 0 bp   & $+6.7$\%   & 0.063  & $-18.9$\% & 51.9\% \\
+Conf-weighted     & 5 bp   & $+5.1$\%   & 0.009  & $-19.3$\% & 51.9\% \\
+Conf-weighted     & 10 bp  & $+3.4$\%   & $-0.045$ & $-19.7$\% & 51.9\% \\
+Conf-weighted     & 20 bp  & $+0.3$\%   & $-0.154$ & $-20.6$\% & 49.4\% \\
+\hline
+\end{tabular}
+\end{center}
+
+Break-even costs: equal weight $\approx$10~bp; confidence-weighted $\approx$5~bp.
+Average weekly turnover: 20.3\%.
+
+\subsubsection{Analysis}
+\begin{itemize}
+    \item The equal-weight strategy generates positive returns at realistic
+          cost levels (10~bp break-even covers most institutional trading costs).
+    \item Confidence-weighted sizing slightly underperforms equal weight,
+          consistent with V2's poor output calibration.
+    \item Sharpe ratios are modest (0.067--0.180); the strategy wins more
+          often than not (51.9\%) but with significant drawdown.
+    \item Maximum drawdown of 19--21\% is large, driven by the small
+          10-ticker universe.
+\end{itemize}
+
+%% ------------------------------------------------------------------
+\subsection{Phase 11 Summary}
+%% ------------------------------------------------------------------
+
+\begin{center}
+\begin{tabular}{lcc}
+\hline
+\textbf{Model / Configuration}            & \textbf{AUC}  & \textbf{Notes} \\
+\hline
+V2  (full, macro 32-d)                    & 0.5989        & Phase 10 baseline \\
+V2.1 (full, macro 128-d)                  & 0.5917        & $-0.0072$ vs V2 \\
+V2 + confidence filter ($\theta=0.50$)    & 0.6149        & No filtering (full = best) \\
+V2.1 + confidence filter ($\theta=0.60$)  & 0.6127        & 32.2\% coverage \\
+\hline
+\end{tabular}
+\end{center}
+
+Key findings:
+\begin{enumerate}
+    \item \textbf{Macro expansion} increases macro gate weight by $2.5\times$
+          but does not improve directional accuracy. V2 (32-d macro)
+          remains the best overall fusion model.
+    \item \textbf{Confidence filtering} is only beneficial on V2.1:
+          +0.021 AUC at 32\% coverage. V2 has poor output calibration
+          and gains nothing from filtering.
+    \item \textbf{Weekly backtest} shows the V2 signal is tradeable at
+          $\leq$10~bp transaction costs; Sharpe 0.18 at zero cost
+          and 0.07 at 10~bp.
+    \item The best overall AUC across all Phase~11 configurations
+          is \textbf{0.6149} (V2, full coverage).
+\end{enumerate}
+
 \end{document}

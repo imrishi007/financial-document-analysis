@@ -1,0 +1,112 @@
+{
+  "equal_weight": {
+    "0": {
+      "total_return": 0.104,
+      "annual_return": 0.0671,
+      "sharpe": 0.1798,
+      "max_drawdown": -0.1897,
+      "win_rate": 0.5195,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 0,
+      "confidence_weighted": false
+    },
+    "5": {
+      "total_return": 0.0869,
+      "annual_return": 0.0562,
+      "sharpe": 0.1233,
+      "max_drawdown": -0.194,
+      "win_rate": 0.5065,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 5,
+      "confidence_weighted": false
+    },
+    "10": {
+      "total_return": 0.0701,
+      "annual_return": 0.0454,
+      "sharpe": 0.0667,
+      "max_drawdown": -0.1983,
+      "win_rate": 0.5065,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 10,
+      "confidence_weighted": false
+    },
+    "20": {
+      "total_return": 0.0372,
+      "annual_return": 0.0243,
+      "sharpe": -0.0463,
+      "max_drawdown": -0.2069,
+      "win_rate": 0.4935,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 20,
+      "confidence_weighted": false
+    }
+  },
+  "confidence_weighted": {
+    "0": {
+      "total_return": 0.0671,
+      "annual_return": 0.0435,
+      "sharpe": 0.0626,
+      "max_drawdown": -0.1886,
+      "win_rate": 0.5195,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 0,
+      "confidence_weighted": true
+    },
+    "5": {
+      "total_return": 0.0506,
+      "annual_return": 0.0329,
+      "sharpe": 0.0085,
+      "max_drawdown": -0.1929,
+      "win_rate": 0.5195,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 5,
+      "confidence_weighted": true
+    },
+    "10": {
+      "total_return": 0.0343,
+      "annual_return": 0.0224,
+      "sharpe": -0.0455,
+      "max_drawdown": -0.1972,
+      "win_rate": 0.5195,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 10,
+      "confidence_weighted": true
+    },
+    "20": {
+      "total_return": 0.0026,
+      "annual_return": 0.0017,
+      "sharpe": -0.1536,
+      "max_drawdown": -0.2058,
+      "win_rate": 0.4935,
+      "n_trading_days": 384,
+      "n_rebalances": 96,
+      "avg_turnover": 0.2031,
+      "annual_turnover": 10.2375,
+      "cost_bps": 20,
+      "confidence_weighted": true
+    }
+  },
+  "equal_weight_break_even_bps": 10.0,
+  "confidence_weighted_break_even_bps": 5.0
+}

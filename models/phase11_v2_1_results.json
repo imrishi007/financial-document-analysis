@@ -1,0 +1,24 @@
+{
+  "macro_expansion": {
+    "test_acc": 0.617647111415863,
+    "test_auc": 0.46903783207733885,
+    "epochs": 14
+  },
+  "fusion_v2_1": {
+    "direction_auc": 0.5917,
+    "direction_acc": 0.5544,
+    "direction_f1": 0.5944,
+    "vol_rmse": 0.1945,
+    "vol_r2": 0.1154,
+    "gate_weights": {
+      "price": 0.1239,
+      "gat": 0.3812,
+      "doc": 0.1779,
+      "macro": 0.3169
+    },
+    "params": 563207,
+    "macro_dim": 128,
+    "epochs_trained": 11,
+    "training_time_s": 419.0
+  }
+}

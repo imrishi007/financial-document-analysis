@@ -1,0 +1,173 @@
+{
+  "model": "V2",
+  "macro_dim": 32,
+  "test_samples": 9520,
+  "full_auc": 0.6149,
+  "full_accuracy": 0.4773,
+  "majority_baseline": 0.6254,
+  "sweep": [
+    {
+      "threshold": 0.5,
+      "N": 9520,
+      "coverage_pct": 100.0,
+      "auc": 0.6149,
+      "accuracy": 0.4773,
+      "f1": 0.3875,
+      "baseline_acc": 0.6254
+    },
+    {
+      "threshold": 0.52,
+      "N": 6172,
+      "coverage_pct": 64.83,
+      "auc": 0.6066,
+      "accuracy": 0.4695,
+      "f1": 0.2171,
+      "baseline_acc": 0.5826
+    },
+    {
+      "threshold": 0.54,
+      "N": 4476,
+      "coverage_pct": 47.02,
+      "auc": 0.5884,
+      "accuracy": 0.458,
+      "f1": 0.0226,
+      "baseline_acc": 0.5474
+    },
+    {
+      "threshold": 0.55,
+      "N": 4058,
+      "coverage_pct": 42.63,
+      "auc": 0.594,
+      "accuracy": 0.4584,
+      "f1": 0.0,
+      "baseline_acc": 0.5416
+    },
+    {
+      "threshold": 0.56,
+      "N": 3690,
+      "coverage_pct": 38.76,
+      "auc": 0.573,
+      "accuracy": 0.4764,
+      "f1": 0.0,
+      "baseline_acc": 0.5236
+    },
+    {
+      "threshold": 0.57,
+      "N": 3266,
+      "coverage_pct": 34.31,
+      "auc": 0.5545,
+      "accuracy": 0.4936,
+      "f1": 0.0,
+      "baseline_acc": 0.5064
+    },
+    {
+      "threshold": 0.58,
+      "N": 2888,
+      "coverage_pct": 30.34,
+      "auc": 0.5137,
+      "accuracy": 0.518,
+      "f1": 0.0,
+      "baseline_acc": 0.518
+    },
+    {
+      "threshold": 0.6,
+      "N": 2028,
+      "coverage_pct": 21.3,
+      "auc": 0.494,
+      "accuracy": 0.5276,
+      "f1": 0.0,
+      "baseline_acc": 0.5276
+    },
+    {
+      "threshold": 0.62,
+      "N": 1250,
+      "coverage_pct": 13.13,
+      "auc": 0.5239,
+      "accuracy": 0.5184,
+      "f1": 0.0,
+      "baseline_acc": 0.5184
+    },
+    {
+      "threshold": 0.65,
+      "N": 228,
+      "coverage_pct": 2.39,
+      "auc": 0.5031,
+      "accuracy": 0.5614,
+      "f1": 0.0,
+      "baseline_acc": 0.5614
+    },
+    {
+      "threshold": 0.7,
+      "N": 0,
+      "coverage_pct": 0.0,
+      "auc": null,
+      "accuracy": null,
+      "f1": null
+    }
+  ],
+  "per_ticker": {
+    "AAPL": {
+      "unfiltered_auc": 0.6944,
+      "filtered_auc": 0.6033,
+      "n_total": 952,
+      "n_filtered": 66
+    },
+    "AMD": {
+      "unfiltered_auc": 0.5926,
+      "filtered_auc": null,
+      "n_total": 952,
+      "n_filtered": 8
+    },
+    "AMZN": {
+      "unfiltered_auc": 0.6597,
+      "filtered_auc": null,
+      "n_total": 952,
+      "n_filtered": 0
+    },
+    "GOOGL": {
+      "unfiltered_auc": 0.4825,
+      "filtered_auc": null,
+      "n_total": 952,
+      "n_filtered": 8
+    },
+    "INTC": {
+      "unfiltered_auc": 0.4566,
+      "filtered_auc": 0.5438,
+      "n_total": 952,
+      "n_filtered": 556
+    },
+    "META": {
+      "unfiltered_auc": 0.6825,
+      "filtered_auc": 0.6289,
+      "n_total": 952,
+      "n_filtered": 328
+    },
+    "MSFT": {
+      "unfiltered_auc": 0.7349,
+      "filtered_auc": 0.55,
+      "n_total": 952,
+      "n_filtered": 64
+    },
+    "NVDA": {
+      "unfiltered_auc": 0.6462,
+      "filtered_auc": null,
+      "n_total": 952,
+      "n_filtered": 0
+    },
+    "ORCL": {
+      "unfiltered_auc": 0.7461,
+      "filtered_auc": null,
+      "n_total": 952,
+      "n_filtered": 36
+    },
+    "TSLA": {
+      "unfiltered_auc": 0.65,
+      "filtered_auc": 0.4332,
+      "n_total": 952,
+      "n_filtered": 184
+    }
+  },
+  "best_filtered_auc": 0.6149,
+  "best_filtered_coverage": 100.0,
+  "best_filter_threshold": 0.5
+}

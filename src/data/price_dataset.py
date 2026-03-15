@@ -26,6 +26,19 @@ ENGINEERED_FEATURES = [
     "ma_5",
     "ma_20",
     "ma_ratio_5_20",
+    # Phase 12: 8 volatility-specific features
+    "parkinson_vol",
+    "garman_klass_vol",
+    "rv_5d",
+    "vol_ratio",
+    "squared_return",
+    "abs_return",
+    "jump_indicator",
+    "ewma_var",
+    # Phase 13: 3 HAR-RV autoregressive features
+    "rv_lag1d",
+    "rv_lag5d",
+    "rv_lag22d",
 ]
 
 

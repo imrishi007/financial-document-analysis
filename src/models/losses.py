@@ -153,3 +153,109 @@ class CombinedLoss(nn.Module):
             "direction": dir_loss,
             "volatility": vol_loss,
         }
+
+
+# ────────────────────────────────────────────────────────────────────
+# Phase 12: QLIKE loss and volatility-primary combined loss
+# ────────────────────────────────────────────────────────────────────
+
+
+class QLIKELoss(nn.Module):
+    """QLIKE (Quasi-Likelihood) loss for volatility forecasting.
+
+    L = mean( sigma_true^2 / sigma_pred^2 + log(sigma_pred^2) )
+
+    This is the standard loss for evaluating volatility forecasts in
+    financial econometrics (Patton, 2011). It is scale-sensitive and
+    penalizes under-prediction more than over-prediction.
+
+    Inputs are *annualized volatility* (not variance). Internally
+    squared to get variance.
+    """
+
+    def __init__(self, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        pred : [B] predicted volatility (must be > 0, e.g. from Softplus)
+        target : [B] realized volatility
+        """
+        valid = (target > self.eps) & (pred > self.eps) & ~torch.isnan(target)
+        if not valid.any():
+            return torch.tensor(0.0, device=pred.device, requires_grad=True)
+
+        pred_var = pred[valid].pow(2).clamp(min=self.eps)
+        true_var = target[valid].pow(2).clamp(min=self.eps)
+
+        # QLIKE: true_var / pred_var + log(pred_var)
+        qlike = true_var / pred_var + torch.log(pred_var)
+        return qlike.mean()
+
+
+class CombinedVolatilityLoss(nn.Module):
+    """Phase 12 combined loss: QLIKE-primary + ListNet-auxiliary.
+
+    L = lambda_vol * L_QLIKE + lambda_dir * L_ListNet
+
+    Default: 0.85 × QLIKE + 0.15 × ListNet (volatility-primary design)
+    """
+
+    def __init__(
+        self,
+        lambda_vol: float = 0.85,
+        lambda_dir: float = 0.15,
+        temperature: float = 5.0,
+        qlike_eps: float = 1e-6,
+    ):
+        super().__init__()
+        self.lambda_vol = lambda_vol
+        self.lambda_dir = lambda_dir
+        self.qlike = QLIKELoss(eps=qlike_eps)
+        self.listnet = ListNetRankingLoss(temperature)
+
+    def forward(
+        self,
+        direction_logits: torch.Tensor,
+        direction_labels: torch.Tensor,
+        volatility_pred: torch.Tensor,
+        volatility_target: torch.Tensor,
+        dates: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """
+        Returns dict with 'total', 'volatility', 'direction' loss tensors.
+        """
+        # Primary: QLIKE volatility loss
+        vol_valid = ~torch.isnan(volatility_target) & (volatility_target > 1e-6)
+        if vol_valid.any():
+            vol_loss = self.qlike(
+                volatility_pred[vol_valid], volatility_target[vol_valid]
+            )
+        else:
+            vol_loss = torch.tensor(0.0, device=volatility_pred.device)
+
+        # Auxiliary: ListNet direction loss
+        dir_valid = direction_labels >= 0
+        if dir_valid.any():
+            dir_loss = self.listnet(
+                direction_logits[dir_valid],
+                direction_labels[dir_valid],
+                dates[dir_valid],
+            )
+        else:
+            dir_loss = torch.tensor(0.0, device=direction_logits.device)
+
+        total = self.lambda_vol * vol_loss + self.lambda_dir * dir_loss
+
+        return {
+            "total": total,
+            "volatility": vol_loss,
+            "direction": dir_loss,
+        }

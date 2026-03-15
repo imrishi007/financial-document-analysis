@@ -98,6 +98,7 @@ data/embeddings/*.pt
 
 logs/*.log
 docs/DATASET_DOCUMENTATION.tex
+docs/MODEL_DOCUMENTATION.tex
 
 # API Keys and secrets
 .env

@@ -46,7 +46,7 @@
     citecolor=blue
 }
 
-\title{\textbf{Multimodal Financial Direction Forecasting Using Deep Learning:\\Model Development \& Experimental Results\\(Phases 3--9 Documentation)}}
+\title{\textbf{Multimodal Financial Direction Forecasting Using Deep Learning:\\Model Development \& Experimental Results\\(Phases 3--11 Documentation)}}
 \author{
     \textbf{Rishi Raval}\\
     Roll Number: 1AUA23BCS155\\
@@ -56,14 +56,14 @@
     \vspace{0.3cm}\\
     \small{GitHub: \url{https://github.com/imrishi007/financial-document-analysis}}
 }
-\date{February 2026}
+\date{March 2026}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-This document continues from the Phase~1 \& 2 Dataset Documentation and presents the complete model development pipeline for a multimodal stock direction forecasting system. Starting from preprocessing and dataset construction (Phase~3), I detail the training and evaluation of five individual models---a CNN-BiLSTM price model, a FinBERT document model, a FinBERT+BiGRU news model, a fundamental surprise MLP, and a custom Graph Attention Network (GAT)---followed by their integration into a gated attention fusion model with multi-task learning. Systematic ablation studies compare single-modality, multi-modality, with/without GAT, and per-ticker performance. The fusion model achieves a volatility prediction R$^2$ of 0.41 and direction AUC of 0.52 across 10 major technology stocks over a 10-year period, with learned gate weights revealing that surprise and price signals contribute most to predictions.
+This document presents the complete model development pipeline for a multimodal stock direction forecasting system targeting 10 major technology stocks over a 10-year period (2016--2026). Starting from preprocessing (Phase~3), it covers training of individual CNN-BiLSTM price, FinBERT document, and Graph Attention Network (GAT) encoders (Phases~4--5), their integration into a gated multi-task fusion model (Phase~6), systematic ablation studies (Phase~7), and four targeted V1 improvements including confidence-filtered trading analysis. A comprehensive V2 redesign (Phase~8--10) addressed critical data-leakage issues, replaced the 5-day binary cross-entropy objective with a 60-day ListNet ranking loss, introduced a new macroeconomic modality (VIX, yields, credit spreads), and adopted AMP fp16 training. The V2 pipeline achieves a direction AUC of \textbf{0.5989} and gate weights dominated by GAT (41.2\%), representing a $+16\%$ improvement over the V1 baseline. Strategic upgrades (Phase~9) evaluated regime-switching ensembles, realistic backtesting, model optimisation, and enhanced cross-stock features, finding the clean V2 fusion to remain the strongest model. Phase~11 applied three targeted improvements: macro encoder expansion to 128-d (V2.1, AUC~0.5917, macro gate $12.6\% \to 31.7\%$), confidence-filtered prediction (V2.1 best AUC~\textbf{0.6127} at 32\% coverage), and a weekly long-short backtest showing \textbf{$+10.4\%$~total return} and Sharpe~0.18 at zero transaction cost~(break-even~$\approx$10\,bp).
 \end{abstract}
 
 \vspace{0.5cm}
@@ -79,8 +79,12 @@ This document continues from the Phase~1 \& 2 Dataset Documentation and presents
     \item \textbf{Phase 5:} Graph Attention Network (Section~\ref{sec:phase5})
     \item \textbf{Phase 6:} Multi-Task Fusion Model (Section~\ref{sec:phase6})
     \item \textbf{Phase 7:} Ablation Studies \& Analysis (Section~\ref{sec:phase7})
-    \item \textbf{Model Improvements:} Loss tuning, dynamic graphs, longer horizons, ensemble (Section~\ref{sec:improvements})
-    \item \textbf{Confidence-Filtered Trading:} Selective prediction via confidence thresholds (Section~\ref{sec:confidence})
+    \item \textbf{V1 Model Improvements:} Loss tuning, dynamic graphs, longer horizons, ensemble (Section~\ref{sec:improvements})
+    \item \textbf{V1 Confidence-Filtered Trading:} Selective prediction via confidence thresholds (Section~\ref{sec:confidence})
+    \item \textbf{Phase 8:} Comprehensive V2 Improvements --- leakage fix, GradNorm, walk-forward, ranking loss (Section~\ref{sec:v2improvements})
+    \item \textbf{Phase 9:} Strategic Model Upgrades --- regime-switching, backtesting, optimisation, cross-stock features
+    \item \textbf{Phase 10:} V2 Pipeline Redesign --- 4-modality, ListNet loss, macro encoder, AMP fp16, 60-day horizon
+    \item \textbf{Phase 11:} Targeted Improvements --- V2.1 macro expansion (128-d), confidence filtering, weekly backtest
 \end{itemize}
 
 \newpage
@@ -2208,5 +2212,427 @@ Key findings:
     \item The best overall AUC across all Phase~11 configurations
           is \textbf{0.6149} (V2, full coverage).
 \end{enumerate}
+
+%% ==================================================================
+%% PHASE 12: Volatility-Primary Redesign with Universe Expansion
+%% ==================================================================
+\newpage
+\section{Phase 12: Volatility-Primary Redesign with Universe Expansion}
+
+\subsection{Motivation}
+Phase~12 makes two simultaneous changes to the V2 pipeline:
+
+\begin{enumerate}
+    \item \textbf{Primary target switch:} Direction $\to$ Volatility.
+    Previous loss: $0.7\times\text{ListNet}(\text{dir}_{60d}) + 0.3\times\text{MSE}(\text{vol})$.
+    New loss: $0.85\times\text{QLIKE}(\text{vol}) + 0.15\times\text{ListNet}(\text{dir}_{60d})$.
+    Rationale: volatility is persistent (GARCH clustering) while
+    direction is near-random (EMH). Optimizing primarily for volatility
+    should yield substantially higher $R^2$.
+
+    \item \textbf{Universe expansion:} 10 $\to$ 30 stocks.
+    Added 20 stocks across 5 sectors: Semiconductors (QCOM, TXN, AVGO, MRVL, KLAC),
+    Cloud/Software (CRM, ADBE, NOW, SNOW, DDOG),
+    Internet/Consumer (NFLX, UBER, PYPL, SNAP),
+    Hardware/Infra (DELL, AMAT, LRCX),
+    Diversified Tech (IBM, CSCO, HPE).
+    ListNet ranking with 30 stocks per date is $3\times$ richer than with 10.
+\end{enumerate}
+
+\subsection{Architecture Changes}
+
+\subsubsection{Phase12FusionModel}
+Key differences from V2 \texttt{MultimodalFusionModel}:
+\begin{itemize}
+    \item \textbf{Volatility head:} Deeper MLP with \texttt{Softplus} activation
+          guaranteeing positive output ($\hat{\sigma} > 0$).
+    \item \textbf{Direction head:} Lightweight auxiliary (fewer parameters).
+    \item \textbf{MC Dropout:} Dropout remains active at inference for
+          epistemic uncertainty estimation ($n=30$ forward passes).
+    \item Total parameters: 559,047 (V2: 545,923).
+\end{itemize}
+
+\subsubsection{QLIKE Loss}
+The Quasi-Likelihood loss (Patton, 2011):
+\[
+    \mathcal{L}_{\text{QLIKE}} = \frac{1}{N}\sum_{i=1}^N
+    \left(\frac{\sigma^2_{\text{true},i}}{\hat{\sigma}^2_i}
+    + \log\hat{\sigma}^2_i\right)
+\]
+Scale-sensitive; penalizes under-prediction of variance more heavily.
+
+\subsubsection{Feature Engineering}
+Eight new volatility-specific features (total: 18):
+\begin{enumerate}
+    \item Parkinson volatility (high/low range, 10-day rolling)
+    \item Garman-Klass volatility (OHLC, 10-day rolling)
+    \item 5-day realized volatility
+    \item Volatility ratio (short/long regime indicator)
+    \item Squared return (instantaneous variance proxy)
+    \item Absolute return (robust volatility proxy)
+    \item Jump indicator ($|r_t| > 3\sigma_{20d}$)
+    \item EWMA variance (exponentially weighted, span=10)
+\end{enumerate}
+
+\subsubsection{Graph Expansion}
+30-node knowledge graph with 70 directed edges (170 bidirectional + 30 self-loops = 200 total).
+Relation types: supplier\_to, platform\_competitor, ad\_competitor, cloud\_competitor,
+consumer\_attention\_overlap, enterprise\_competitor, index\_correlation.
+
+\subsection{Training Configuration}
+\begin{itemize}
+    \item Component models: Price (CNN-BiLSTM, 18 features), GAT (30 nodes, 18 features)
+    \item Document model: FinBERT reused from V2 (227 filings for 30 stocks)
+    \item Macro model: reused from V2 (12 macro features $\to$ 32-d embedding)
+    \item Fusion: AdamW lr=$5\times10^{-4}$, CosineAnnealing, 50 epochs, batch 2048
+    \item AMP (fp16) throughout; RTX 2050 4.3~GB VRAM
+\end{itemize}
+
+\subsection{Data Summary}
+
+\begin{center}
+\begin{tabular}{lrrr}
+\hline
+\textbf{Split} & \textbf{Samples} & \textbf{Mean Vol} & \textbf{Dir \%UP} \\
+\hline
+Train ($\leq$ 2022-12-31) & 48,532 & 0.356 & 63.2\% \\
+Val (2023)                & 8,057  & 0.348 & 73.7\% \\
+Test ($>$ 2023-12-31)     & 17,204 & 0.396 & 58.8\% \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Results}
+
+\begin{center}
+\begin{tabular}{lccccc}
+\hline
+\textbf{Model} & \textbf{Vol $R^2$} & \textbf{Vol MAE} & \textbf{Vol RMSE}
+               & \textbf{Dir AUC} & \textbf{Dir Acc} \\
+\hline
+V2 Baseline         & 0.335  & ---    & ---    & 0.5989 & ---    \\
+Historical Average  & 0.348  & 0.112  & 0.157  & ---    & ---    \\
+HAR-RV              & 0.947  & 0.018  & 0.045  & ---    & ---    \\
+\textbf{Phase 12}   & \textbf{0.772} & \textbf{0.062} & \textbf{0.096}
+                    & 0.568  & 0.570  \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Embedding Coverage}
+
+\begin{center}
+\begin{tabular}{lr}
+\hline
+\textbf{Modality} & \textbf{Coverage} \\
+\hline
+Price (CNN-BiLSTM)    & 73,793 / 73,793 (100.0\%) \\
+GAT (30-node graph)   & 73,292 / 73,793 (99.3\%) \\
+Document (FinBERT)    & 54,362 / 73,793 (73.7\%) \\
+Macro (MLP-3L)        & 73,468 / 73,793 (99.6\%) \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Key Findings}
+\begin{enumerate}
+    \item \textbf{Volatility $R^2$ improved from 0.335 to 0.772} ($+130\%$),
+          confirming that QLIKE-primary optimization with volatility-specific
+          features dramatically outperforms MSE-auxiliary volatility prediction.
+    \item \textbf{Direction AUC decreased from 0.599 to 0.568} ($-5\%$),
+          as expected when direction becomes a $15\%$-weighted auxiliary task.
+          The trade-off is justified: volatility is the actionable signal.
+    \item \textbf{HAR-RV remains a strong univariate baseline} ($R^2=0.947$)
+          because it directly auto-regresses on lagged realized volatility.
+          The multimodal model uses fundamentally different inputs (embeddings
+          from price patterns, graph attention, documents, macro) and achieves
+          $R^2=0.772$ without explicitly encoding lagged RV.
+    \item \textbf{Universe expansion to 30 stocks} increased training data
+          by $\sim3\times$ and enriched ListNet ranking diversity.
+          Document coverage expanded from $\sim52$ to 227 filings.
+    \item \textbf{Softplus volatility head} guarantees positive predictions,
+          eliminating the need for post-hoc clipping that MSE-based models require.
+    \item \textbf{MC Dropout uncertainty} enables confidence-weighted trading
+          strategies in downstream applications.
+\end{enumerate}
+
+%% ============================================================
+%% PHASE 13: HAR-RV Integration + Loss Optimization
+%% ============================================================
+\section{Phase 13: HAR-RV Integration, Loss Optimization, and Volatility Trading Strategy}
+
+\subsection{Motivation}
+Phase~12 achieved volatility $R^2=0.772$ without explicitly encoding lagged realized
+volatility, while the pure HAR-RV baseline reached $R^2=0.947$.  Phase~13 closes this
+gap by (1)~adding HAR-RV autoregressive features directly into the price feature set,
+(2)~systematically varying the QLIKE/ListNet loss weighting, and (3)~evaluating whether
+improved volatility predictions translate to profitable trading strategies.
+
+\subsection{HAR-RV Feature Engineering}
+Three autoregressive features were added to the price feature pipeline, expanding the
+engineered feature count from 18 to 21:
+\begin{enumerate}
+    \item \textbf{rv\_lag1d}: Daily lagged realized volatility---annualized standard
+          deviation of log returns over a 20-day rolling window, shifted by 1 day.
+    \item \textbf{rv\_lag5d}: Weekly lagged RV---5-day rolling mean of daily RV,
+          shifted by 1 day (Corsi 2009 weekly component).
+    \item \textbf{rv\_lag22d}: Monthly lagged RV---22-day rolling mean of daily RV,
+          shifted by 1 day (Corsi 2009 monthly component).
+\end{enumerate}
+All three features use \texttt{shift(1)} to prevent look-ahead bias.  Leakage
+validation confirmed: correlation of rv\_lag1d with the forward volatility target
+is 0.454, while correlation with the direction label is 0.017 (consistent with
+information content rather than data leakage).
+
+\subsection{Loss Weight Variants}
+Three fusion model variants were trained with identical architecture
+(Phase13FusionModel, 559,047 parameters) but different QLIKE/ListNet loss weights:
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Variant} & $\lambda_{\text{vol}}$ & $\lambda_{\text{dir}}$ &
+\textbf{Vol $R^2$} & \textbf{RMSE} & \textbf{Dir AUC} \\
+\midrule
+vol\_primary   & 0.85 & 0.15 & \textbf{0.8665} & \textbf{0.0733} & 0.5848 \\
+balanced       & 0.50 & 0.50 & 0.7368 & 0.1029 & 0.5788 \\
+dir\_assisted  & 0.70 & 0.30 & 0.8502 & 0.0777 & \textbf{0.5854} \\
+\bottomrule
+\end{tabular}
+\end{center}
+The vol\_primary variant (0.85/0.15) achieves the best volatility $R^2$,
+while dir\_assisted (0.70/0.30) offers the best direction AUC with only a modest
+$R^2$ decrease.  The balanced variant (0.50/0.50) underperforms on \emph{both}
+objectives, confirming that competing QLIKE and ListNet gradients at equal weight
+produce unstable optimization (early-stopped at epoch~10 vs 40 and 26 for the others).
+
+\subsection{Benchmark Comparison}
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Vol $R^2$} & \textbf{RMSE} & \textbf{Dir AUC} & \textbf{$\Delta$ vs P12} \\
+\midrule
+Historical Average & 0.348 & --- & --- & --- \\
+V2 Baseline        & 0.335 & --- & --- & --- \\
+HAR-RV             & \textbf{0.947} & --- & --- & --- \\
+Phase 12 Fusion    & 0.772 & 0.096 & 0.568 & (ref) \\
+\textbf{Phase 13 vol\_primary} & \underline{0.867} & \textbf{0.073} & 0.585 & +12.3\% \\
+Phase 13 balanced  & 0.737 & 0.103 & 0.579 & $-4.5\%$ \\
+Phase 13 dir\_assisted & 0.850 & 0.078 & \textbf{0.585} & +10.1\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Phase~13 does \emph{not} beat HAR-RV ($R^2=0.947$), but the gap is reduced from
+0.175 (Phase~12) to 0.080 (Phase~13 vol\_primary)---a 54\% reduction.  The remaining
+gap reflects that HAR-RV directly auto-regresses on the target variable, while the
+multimodal model must learn this relationship indirectly through embeddings.
+
+\subsection{Gate Weight Analysis}
+The vol\_primary attention gates assign: Price=61.8\%, GAT=4.9\%, Document=17.8\%,
+Macro=15.6\%.  Price dominance is expected given the HAR-RV autoregressive features
+now encoded in the price embedding.  Document weight (17.8\%) confirms that SEC
+filings provide complementary forward-looking volatility information beyond what
+pure price history captures.
+
+\subsection{Volatility Trading Strategy}
+A market-neutral long/short strategy was constructed:
+\begin{itemize}
+    \item \textbf{Signal}: ratio of predicted volatility to historical average
+          volatility per stock.
+    \item \textbf{Position sizing}: uncertainty-weighted (MC Dropout with 30 forward
+          passes), weekly rebalancing.
+    \item \textbf{Long}: stocks with high predicted/historical vol ratio;
+          \textbf{Short}: low ratio.
+\end{itemize}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Strategy} & \textbf{Sharpe} & \textbf{Total Return} & \textbf{Max DD} \\
+\midrule
+Vol Strategy (0bp)  & $-0.453$ & $-1.83\%$ & --- \\
+Dir Strategy (0bp)  & 0.604   & 11.48\%   & --- \\
+Buy \& Hold (EW 30) & 0.652   & 22.28\%   & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The volatility strategy underperforms because (1)~predicting future volatility
+\emph{levels} well does not imply profitable volatility \emph{mispricing} signals,
+and (2)~the test period (2024--2025) is a strong bull market where directional
+exposure dominates market-neutral strategies.  The direction strategy achieves a
+positive Sharpe (0.604) despite modest AUC (0.585), confirming that even weak
+directional signals compound profitably with sufficient diversification across
+30~stocks.
+
+\subsection{Phase 13 Key Takeaways}
+\begin{enumerate}
+    \item \textbf{HAR-RV features close 54\% of the gap to the HAR-RV benchmark},
+          improving vol $R^2$ from 0.772 to 0.867 ($+12.3\%$).
+    \item \textbf{Loss weight 0.85/0.15 is optimal for volatility}, confirming
+          that heavy QLIKE weighting is necessary for accurate vol forecasting.
+    \item \textbf{Direction AUC improves despite lower weight} (0.568 $\to$ 0.585),
+          because HAR-RV features provide auxiliary directional information.
+    \item \textbf{Volatility prediction quality does not directly translate to
+          profitable equity strategies}---options or variance swap strategies
+          would be more natural applications.
+    \item \textbf{Balanced (0.50/0.50) weighting is harmful}---competing objectives
+          at equal strength produce unstable training and inferior results on
+          \emph{both} tasks.
+\end{enumerate}
+
+%% ====================================================================
+\section{Phase 14: HAR-RV Skip Connection and Fixed Volatility Strategy}
+%% ====================================================================
+
+\subsection{Motivation}
+
+Phase~13 achieved vol~$R^2 = 0.867$, still $0.080$ below HAR-RV ($R^2 = 0.947$).
+The gap exists because the CNN-BiLSTM compresses the $[60, 21]$ price sequence
+into a 256-dimensional embedding, losing some of the autoregressive signal that
+HAR-RV exploits directly via lagged realized volatility.  Two targeted
+improvements were implemented: (1)~a skip connection feeding raw HAR-RV features
+directly into the fusion trunk, bypassing the CNN-BiLSTM bottleneck; (2)~a
+VIX~$\times$~$\beta$ implied volatility proxy to transform the raw vol strategy
+into a mispricing signal.
+
+\subsection{HAR-RV Skip Connection Architecture}
+
+The only structural change from Phase~13 is the addition of a 3-dimensional skip
+path.  From the last timestep of the $[60, 21]$ price tensor, features at
+indices 18--20 (\texttt{rv\_lag1d}, \texttt{rv\_lag5d}, \texttt{rv\_lag22d}) are
+extracted and projected through a small network ($3 \to 32$ with LayerNorm and
+GELU).  The 32-dimensional projection is concatenated \emph{directly} to the
+gated modality features before the shared trunk, bypassing the gating mechanism
+entirely:
+\[
+  \mathbf{z}_{\text{trunk}} = [\mathbf{p}_g,\, \mathbf{g}_g,\, \mathbf{d}_g,\,
+  \mathbf{m}_g,\, \text{HAR-proj}(\mathbf{rv}_{-1})]
+  \in \mathbb{R}^{4 \times 128 + 32 = 544}
+\]
+where subscript $g$ denotes gated projections.  Total parameters increased from
+559,303 (Phase~13) to 567,431 (Phase~14, $+1.5\%$).
+
+\subsection{Volatility Forecasting Results}
+
+Training used 0.85~QLIKE + 0.15~ListNet, AdamW ($\text{lr}=5\times10^{-4}$,
+$\text{wd}=10^{-3}$), cosine annealing over 60 epochs with patience-7 early
+stopping.  The model converged at epoch~26.
+
+\begin{center}
+\begin{tabular}{l r r r r}
+\hline
+\textbf{Model} & \textbf{Vol $R^2$} & \textbf{RMSE} & \textbf{QLIKE} & \textbf{Dir AUC} \\
+\hline
+Historical Average & 0.348 & --- & --- & --- \\
+V2 Baseline        & 0.335 & --- & --- & --- \\
+HAR-RV             & 0.947 & 0.045 & --- & --- \\
+Phase~12           & 0.772 & 0.096 & --- & 0.568 \\
+Phase~13           & 0.867 & 0.073 & --- & 0.585 \\
+Phase~14 (skip)    & 0.921 & 0.056 & $-0.994$ & 0.591 \\
+\hline
+\end{tabular}
+\end{center}
+
+Phase~14 \textbf{does not beat HAR-RV} ($R^2 = 0.921$ vs.\ 0.947, gap~$= 0.026$).
+However, it closed $0.586$ of the $0.612$ total gap between V2 Baseline and
+HAR-RV (95.7\%).  The remaining 0.026 likely reflects the irreducible advantage
+of a pure linear model on strongly autoregressive data: HAR-RV's three
+coefficients are estimated by OLS with zero compression, whereas the skip
+connection still passes through a projection and nonlinearity.
+
+Gate weights shifted toward price (58.6\%) as the skip connection captured the
+autoregressive signal, reducing reliance on document (19.5\%) and macro (6.8\%).
+The HAR-RV skip contribution (mean absolute difference between predictions with
+and without the skip) was 0.115, confirming active utilization.
+
+\subsection{VIX-Adjusted Volatility Trading Strategy}
+
+Phase~13's raw vol strategy failed (Sharpe~$= -0.453$) because it went long
+high-predicted-vol stocks without reference to what the market already priced in.
+Phase~14 used VIX~$\times$~$\beta_i$ as a proxy for stock~$i$'s market-implied
+volatility, where $\beta_i$ was estimated from trailing 252-day returns against
+SPY.  The signal became $\sigma_{\text{pred}} - \sigma_{\text{implied}}$
+(positive~$\to$ underpriced, short when overpriced).
+
+\begin{center}
+\begin{tabular}{l r r r}
+\hline
+\textbf{Strategy} & \textbf{Sharpe} & \textbf{Ann.\ Return} & \textbf{Max DD} \\
+\hline
+Vol raw (0bp)       & $-0.763$ & $-6.4\%$ & $-26.3\%$ \\
+Vol VIX-adj (0bp)   & $-1.178$ & $-9.3\%$ & $-20.0\%$ \\
+Vol VIX-adj (5bp)   & $-1.241$ & $-10.1\%$ & $-21.1\%$ \\
+Vol VIX-adj (10bp)  & $-1.304$ & $-10.8\%$ & $-22.1\%$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The VIX-adjusted strategy did \textbf{not} improve over the raw vol strategy.
+VIX~$\times$~$\beta$ is a market-level proxy; individual stock implied
+volatility from options data would be needed for meaningful mispricing detection.
+
+\subsection{Direction Strategy Cost Sensitivity}
+
+\begin{center}
+\begin{tabular}{l r r r}
+\hline
+\textbf{Cost} & \textbf{Sharpe} & \textbf{Ann.\ Return} & \textbf{Max DD} \\
+\hline
+0bp  & $+0.697$ & $+12.9\%$ & $-11.4\%$ \\
+5bp  & $+0.620$ & $+12.0\%$ & $-11.6\%$ \\
+10bp & $+0.543$ & $+11.2\%$ & $-11.9\%$ \\
+20bp & $+0.392$ & $+9.5\%$  & $-12.4\%$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The direction strategy remains viable at realistic transaction costs (Sharpe
+$> 0$ at 20bp), making it the most practical trading application of the model.
+
+\subsection{Phase 14 Key Findings}
+
+\begin{enumerate}
+    \item \textbf{HAR-RV skip connection improved vol $R^2$ from 0.867 to
+          0.921} ($+6.3\%$), closing 95.7\% of the gap from V2 to HAR-RV.
+    \item \textbf{The skip connection is actively used} (contribution metric
+          $= 0.115$), confirming the CNN-BiLSTM bottleneck was a real
+          information loss.
+    \item \textbf{Phase~14 does not beat HAR-RV} ($R^2 = 0.921$ vs.\ 0.947).
+          The remaining gap of 0.026 reflects HAR-RV's zero-compression
+          advantage on strongly autoregressive data.
+    \item \textbf{VIX~$\times$~$\beta$ is too crude} for individual stock
+          implied volatility; the mispricing strategy requires actual options
+          data.
+    \item \textbf{The direction strategy survives realistic costs}: Sharpe
+          $= 0.620$ at 5bp, $0.543$ at 10bp, $0.392$ at 20bp.
+    \item \textbf{Dir AUC improved slightly} from 0.585 (Phase~13) to 0.591
+          (Phase~14), suggesting the skip connection provides marginal
+          directional information.
+\end{enumerate}
+
+\subsection{Complete Project Summary}
+
+\begin{center}
+\begin{tabular}{l l r r}
+\hline
+\textbf{Phase} & \textbf{Description} & \textbf{Vol $R^2$} & \textbf{Dir AUC} \\
+\hline
+Phase 6  & V1 Fusion               & 0.440 & 0.545 \\
+Phase 11 & V2 Fusion + ListNet     & 0.335 & 0.565 \\
+Phase 12 & Vol-Primary + QLIKE     & 0.772 & 0.568 \\
+Phase 13 & HAR-RV + 30 stocks      & 0.867 & 0.585 \\
+Phase 14 & Skip Connection         & 0.921 & 0.591 \\
+HAR-RV   & Benchmark               & 0.947 & --- \\
+\hline
+\end{tabular}
+\end{center}
+
+Over Phases~12--14, volatility $R^2$ improved from 0.335 to 0.921—a 2.75$\times$
+improvement driven by QLIKE loss, HAR-RV autoregressive features, and the skip
+connection architecture.  The direction strategy produces positive risk-adjusted
+returns at realistic costs, while the volatility model approaches—but does not
+surpass—the HAR-RV econometric benchmark.
 
 \end{document}

@@ -21,6 +21,26 @@ data:
     - AMD
     - INTC
     - ORCL
+    - QCOM
+    - TXN
+    - AVGO
+    - MRVL
+    - KLAC
+    - CRM
+    - ADBE
+    - NOW
+    - SNOW
+    - DDOG
+    - NFLX
+    - UBER
+    - PYPL
+    - SNAP
+    - DELL
+    - AMAT
+    - LRCX
+    - IBM
+    - CSCO
+    - HPE
 
 training:
   seed: 42
